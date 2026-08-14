@@ -136,7 +136,22 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                   {num}
                 </button>
               ))}
-              <div />
+              <button
+                type="submit"
+                style={{
+                  padding: '14px 0',
+                  fontSize: 16,
+                  fontWeight: 700,
+                  borderRadius: 12,
+                  border: '1px solid rgba(34,197,94,0.3)',
+                  background: 'rgba(34,197,94,0.2)',
+                  color: '#4ade80',
+                  cursor: 'pointer',
+                }}
+                title="Aceptar PIN"
+              >
+                ✓
+              </button>
               <button
                 type="button"
                 onClick={() => handleDigit('0')}
@@ -170,6 +185,25 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                 ⌫
               </button>
             </div>
+
+            <button
+              type="submit"
+              style={{
+                width: '100%',
+                padding: '14px',
+                fontSize: 16,
+                fontWeight: 700,
+                borderRadius: 12,
+                background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                border: 'none',
+                color: '#fff',
+                marginBottom: 16,
+                cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(99, 102, 241, 0.4)',
+              }}
+            >
+              🔓 INGRESAR
+            </button>
 
             <p style={{ fontSize: 11, color: '#64748b', margin: 0 }}>
               PIN por defecto: <strong style={{ color: '#cbd5e1' }}>1234</strong> (cambiable en Configuración)
