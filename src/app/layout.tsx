@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { BottomNav } from '@/components/BottomNav';
+import { AuthGuard } from '@/components/AuthGuard';
 
 export const metadata: Metadata = {
   title: 'Mis Finanzas',
@@ -31,14 +32,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Kill-switch: elimina todos los service workers y cachés previos */}
+        <script dangerouslySetInnerHTML={{ __html: `
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+              for (let reg of registrations) {
+                reg.update();
+                reg.unregister();
+              }
+            });
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                for (let name of names) { caches.delete(name); }
+              });
+            }
+          }
+        `}} />
       </head>
       <body>
-        <div className="app-shell">
-          <main className="page-content">
-            {children}
-          </main>
-          <BottomNav />
-        </div>
+        <AuthGuard>
+          <div className="app-shell">
+            <main className="page-content">
+              {children}
+            </main>
+            <BottomNav />
+          </div>
+        </AuthGuard>
       </body>
     </html>
   );

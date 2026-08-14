@@ -1,4 +1,5 @@
 import Dexie, { Table } from 'dexie';
+import historicalData from './historical-data.json';
 
 export interface Category {
   id?: number;
@@ -20,6 +21,7 @@ export interface Expense {
   date: string;
   amount: number;
   detail: string;
+  store?: string; // Comercio / Local
   notes?: string;
   category_id: number;
   subcategory_id: number;
@@ -179,63 +181,57 @@ class MisFinanzasDB extends Dexie {
 
 export const db = new MisFinanzasDB();
 
-// ─── Seed de categorías por defecto ──────────────────────────────────────────
-const DEFAULT_CATEGORIES = [
-  { name: 'Alimentación', icon: '🍔', color: '#F59E0B' },
-  { name: 'Transporte', icon: '🚗', color: '#3B82F6' },
-  { name: 'Hogar', icon: '🏠', color: '#8B5CF6' },
-  { name: 'Servicios', icon: '💡', color: '#06B6D4' },
-  { name: 'Salud', icon: '🏥', color: '#10B981' },
-  { name: 'Entretenimiento', icon: '🎬', color: '#EC4899' },
-  { name: 'Ropa & Calzado', icon: '👕', color: '#F97316' },
-  { name: 'Deportes & Bienestar', icon: '💪', color: '#14B8A6' },
-  { name: 'Social & Eventos', icon: '🎉', color: '#A855F7' },
-  { name: 'Educación', icon: '📚', color: '#6366F1' },
-  { name: 'Tecnología', icon: '💻', color: '#0EA5E9' },
-  { name: 'Impuestos & Finanzas', icon: '💰', color: '#EAB308' },
-  { name: 'Otros', icon: '📦', color: '#94A3B8' },
-];
+// ─── Carga automática de datos históricos ────────────────────────────────────
+export async function seedDatabase(force: boolean = false) {
+  const expenseCount = await db.expenses.count();
+  if (expenseCount > 0 && !force) return;
 
-const DEFAULT_SUBCATEGORIES: Record<string, string[]> = {
-  'Alimentación': ['Supermercado', 'Restaurantes', 'Delivery', 'Cafetería', 'Verdulería', 'Carnicería'],
-  'Transporte': ['Nafta', 'Peajes', 'Estacionamiento', 'Colectivo', 'Taxi / Uber', 'Mecánico'],
-  'Hogar': ['Alquiler', 'Expensas', 'Limpieza', 'Muebles', 'Reparaciones', 'Jardín'],
-  'Servicios': ['Electricidad', 'Gas', 'Agua', 'Internet', 'Celular', 'Streaming'],
-  'Salud': ['Obra social / Prepaga', 'Farmacia', 'Médico', 'Dentista', 'Laboratorio', 'Óptica'],
-  'Entretenimiento': ['Cine', 'Juegos', 'Salidas', 'Vacaciones', 'Libros', 'Conciertos'],
-  'Ropa & Calzado': ['Ropa', 'Calzado', 'Accesorios', 'Ropa Interior'],
-  'Deportes & Bienestar': ['Gimnasio', 'Equipamiento', 'Suplementos', 'Spa / Belleza', 'Peluquería'],
-  'Social & Eventos': ['Regalos', 'Juntadas', 'Cumpleaños', 'Casamiento', 'Propina'],
-  'Educación': ['Cursos', 'Universidad', 'Libros', 'Material'],
-  'Tecnología': ['Hardware', 'Software', 'Accesorios', 'Suscripciones'],
-  'Impuestos & Finanzas': ['Impuestos AFIP', 'Monotributo', 'Seguros', 'Banco', 'Inversiones'],
-  'Otros': ['Varios', 'Sin categoría'],
-};
-
-export async function seedDatabase() {
-  const count = await db.categories.count();
-  if (count > 0) return; // Ya inicializado
-
-  await db.transaction('rw', db.categories, db.subcategories, async () => {
-    for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
-      const cat = DEFAULT_CATEGORIES[i];
-      const catId = await db.categories.add({
-        name: cat.name,
-        icon: cat.icon,
-        color: cat.color,
-        sort_order: i + 1,
-      });
-
-      const subs = DEFAULT_SUBCATEGORIES[cat.name] || [];
-      for (let j = 0; j < subs.length; j++) {
-        await db.subcategories.add({
-          category_id: catId as number,
-          name: subs[j],
-          sort_order: j + 1,
-        });
+  await db.transaction(
+    'rw',
+    [
+      db.categories,
+      db.subcategories,
+      db.expenses,
+      db.fixed_expenses,
+      db.fixed_expense_payments,
+      db.income,
+      db.salary_config,
+      db.loans,
+      db.loan_payments,
+      db.reintegros,
+      db.ai_rules,
+    ],
+    async () => {
+      if (force) {
+        await Promise.all([
+          db.categories.clear(),
+          db.subcategories.clear(),
+          db.expenses.clear(),
+          db.fixed_expenses.clear(),
+          db.fixed_expense_payments.clear(),
+          db.income.clear(),
+          db.salary_config.clear(),
+          db.loans.clear(),
+          db.loan_payments.clear(),
+          db.reintegros.clear(),
+          db.ai_rules.clear(),
+        ]);
       }
+
+      const h = historicalData as any;
+      if (h.categories?.length) await db.categories.bulkAdd(h.categories);
+      if (h.subcategories?.length) await db.subcategories.bulkAdd(h.subcategories);
+      if (h.expenses?.length) await db.expenses.bulkAdd(h.expenses);
+      if (h.fixed_expenses?.length) await db.fixed_expenses.bulkAdd(h.fixed_expenses);
+      if (h.fixed_expense_payments?.length) await db.fixed_expense_payments.bulkAdd(h.fixed_expense_payments);
+      if (h.income?.length) await db.income.bulkAdd(h.income);
+      if (h.salary_config?.length) await db.salary_config.bulkAdd(h.salary_config);
+      if (h.loans?.length) await db.loans.bulkAdd(h.loans);
+      if (h.loan_payments?.length) await db.loan_payments.bulkAdd(h.loan_payments);
+      if (h.reintegros?.length) await db.reintegros.bulkAdd(h.reintegros);
+      if (h.ai_rules?.length) await db.ai_rules.bulkAdd(h.ai_rules);
     }
-  });
+  );
 }
 
 // ─── Helpers de consulta ─────────────────────────────────────────────────────
@@ -264,10 +260,20 @@ export async function getPeriodBalance(startDate: string, endDate: string) {
   let totalIncome = await getPeriodIncomeTotal(startDate, endDate);
   const totalExpenses = await getPeriodExpensesTotal(startDate, endDate);
 
-  // Fallback: si no hay ingresos manuales, usa el sueldo configurado
+  // Si no hay ingresos en el mes actual, buscar si hay un sueldo cobrado a fin del mes anterior (días 24-31)
   if (totalIncome === 0) {
-    const sal = await db.salary_config.orderBy('id').last();
-    if (sal) totalIncome = sal.monthly_amount;
+    const prevDate = new Date(startDate);
+    prevDate.setDate(prevDate.getDate() - 8);
+    const prevWindowStart = prevDate.toISOString().split('T')[0];
+
+    const prevSalary = await db.income
+      .where('date').between(prevWindowStart, startDate, false, true)
+      .and(i => i.type === 'salary')
+      .first();
+
+    if (prevSalary) {
+      totalIncome = prevSalary.amount;
+    }
   }
 
   return { totalIncome, totalExpenses, disponible: totalIncome - totalExpenses, startDate, endDate };
@@ -300,4 +306,117 @@ export function formatARS(value: number): string {
     currency: 'ARS',
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxcSb43RiRBAvy6ksZXg-iF2aL9vsvbHH5T1NyV0GUOqUidq8bnoJbZ0yf0DsgzQfURwg/exec';
+
+// ─── Logging de sincronización ────────────────────────────────────────────────
+
+export interface SyncLogEntry {
+  ts: string;
+  action: 'add' | 'update' | 'delete';
+  expenseId: number;
+  movement?: object;
+  status: 'ENVIADO' | 'ERROR_URL' | 'ERROR_RED';
+  error?: string;
+}
+
+function addSyncLog(entry: SyncLogEntry) {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('sync_logs');
+    const logs: SyncLogEntry[] = raw ? JSON.parse(raw) : [];
+    logs.unshift(entry); // más reciente primero
+    if (logs.length > 50) logs.splice(50);
+    localStorage.setItem('sync_logs', JSON.stringify(logs));
+  } catch { /* ignorar errores de storage */ }
+}
+
+export function getSyncLogs(): SyncLogEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('sync_logs');
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function clearSyncLogs() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('sync_logs');
+}
+
+// ─── Función central de sincronización ───────────────────────────────────────
+
+export async function syncToSheets(
+  action: 'add' | 'update' | 'delete',
+  expenseId: number,
+  movement?: {
+    fecha?: string;
+    tipo?: 'Gasto' | 'Ingreso';
+    categoria?: string;
+    subcategoria?: string;
+    comercio?: string;
+    detalle?: string;
+    monto?: number;
+    notas?: string;
+  }
+) {
+  const ts = new Date().toISOString();
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
+  const url = customUrl || APPS_SCRIPT_URL;
+
+  if (!url) {
+    const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_URL', error: 'Sin URL configurada' };
+    addSyncLog(entry);
+    console.error('[SYNC] ❌ Sin URL de Apps Script configurada', entry);
+    return;
+  }
+
+  const payload = {
+    action: action === 'add' ? 'add_new_movement' : action,
+    actionType: action,
+    sheetName: 'Nuevos_Movimientos_App',
+    expenseId,
+    movement,
+  };
+
+  console.log(`[SYNC] 📤 Enviando action=${action} expenseId=${expenseId}`, payload);
+
+  try {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+      mode: 'no-cors',
+      cache: 'no-cache',
+    }).then(() => {
+      const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ENVIADO' };
+      addSyncLog(entry);
+      console.log(`[SYNC] ✅ Enviado OK action=${action} expenseId=${expenseId}`);
+    }).catch(err => {
+      const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_RED', error: String(err) };
+      addSyncLog(entry);
+      console.error(`[SYNC] ❌ Error de red action=${action}`, err);
+    });
+  } catch (err) {
+    const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_RED', error: String(err) };
+    addSyncLog(entry);
+    console.error('[SYNC] ❌ Excepción inesperada', err);
+  }
+}
+
+// ─── Alias de compatibilidad (usado en código existente) ──────────────────────
+
+export async function syncMovementToGoogleSheets(movement: {
+  fecha: string;
+  tipo: 'Gasto' | 'Ingreso';
+  categoria: string;
+  subcategoria: string;
+  comercio?: string;
+  detalle: string;
+  monto: number;
+  notas?: string;
+  expenseId?: number;
+}) {
+  await syncToSheets('add', movement.expenseId || 0, movement);
 }

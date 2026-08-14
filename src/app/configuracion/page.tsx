@@ -1,17 +1,27 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { db } from '@/lib/db';
+import { db, seedDatabase, getSyncLogs, clearSyncLogs } from '@/lib/db';
+import type { SyncLogEntry } from '@/lib/db';
 
 export default function ConfiguracionPage() {
   const [apiKey, setApiKey] = useState('');
   const [savedKey, setSavedKey] = useState(false);
+  const [appsScriptUrl, setAppsScriptUrl] = useState('');
+  const [savedScriptUrl, setSavedScriptUrl] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [stats, setStats] = useState({ expenses: 0, incomes: 0, fixed: 0 });
+  const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>([]);
+  const [pin, setPin] = useState('1234');
+  const [savedPinToast, setSavedPinToast] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setApiKey(localStorage.getItem('gemini_api_key') || '');
+      setApiKey(localStorage.getItem('gemini_api_key') || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
+      setAppsScriptUrl(localStorage.getItem('apps_script_url') || 'https://script.google.com/macros/s/AKfycbxcSb43RiRBAvy6ksZXg-iF2aL9vsvbHH5T1NyV0GUOqUidq8bnoJbZ0yf0DsgzQfURwg/exec');
+      setPin(localStorage.getItem('app_pin') || '1234');
+      setSyncLogs(getSyncLogs());
     }
     loadStats();
   }, []);
@@ -29,6 +39,25 @@ export default function ConfiguracionPage() {
     localStorage.setItem('gemini_api_key', apiKey.trim());
     setSavedKey(true);
     setTimeout(() => setSavedKey(false), 2000);
+  };
+
+  const handleSavePin = () => {
+    localStorage.setItem('app_pin', pin.trim());
+    setSavedPinToast(true);
+    setTimeout(() => setSavedPinToast(false), 2000);
+  };
+
+  const handleLogoutApp = () => {
+    sessionStorage.removeItem('app_auth');
+    window.location.reload();
+  };
+
+  const handleReloadHistory = async () => {
+    setLoadingHistory(true);
+    await seedDatabase(true);
+    await loadStats();
+    setLoadingHistory(false);
+    alert('✅ Datos históricos reales (267 gastos) cargados con éxito en la aplicación!');
   };
 
   const handleExportData = async () => {
@@ -57,30 +86,34 @@ export default function ConfiguracionPage() {
     setExporting(false);
   };
 
-  const handleImportData = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleDownloadNewMovementsCSV = async () => {
+    const expenses = await db.expenses.where('id').above(267).toArray();
+    const incomes = await db.income.toArray();
 
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const json = JSON.parse(evt.target?.result as string);
-        if (json.expenses) {
-          await db.transaction('rw', [db.categories, db.subcategories, db.expenses, db.income, db.fixed_expenses], async () => {
-            if (json.categories) await db.categories.bulkPut(json.categories);
-            if (json.subcategories) await db.subcategories.bulkPut(json.subcategories);
-            if (json.expenses) await db.expenses.bulkPut(json.expenses);
-            if (json.income) await db.income.bulkPut(json.income);
-            if (json.fixed_expenses) await db.fixed_expenses.bulkPut(json.fixed_expenses);
-          });
-          alert('✅ Datos importados con éxito');
-          loadStats();
-        }
-      } catch (err) {
-        alert('❌ Error al importar el archivo JSON');
-      }
-    };
-    reader.readAsText(file);
+    const catMap = Object.fromEntries((await db.categories.toArray()).map(c => [c.id, c.name]));
+    const subMap = Object.fromEntries((await db.subcategories.toArray()).map(s => [s.id, s.name]));
+
+    let csv = 'Categoría;Subcategoría;Tipo;Fecha;Detalle;Importe\n';
+
+    expenses.forEach(e => {
+      const cat = catMap[e.category_id] || 'Gasto';
+      const sub = subMap[e.subcategory_id] || 'General';
+      const amtStr = e.amount.toFixed(2).replace('.', ',');
+      csv += `"${cat}";"${sub}";"Gasto";"${e.date}";"${(e.detail || '').replace(/"/g, '""')}";${amtStr}\n`;
+    });
+
+    incomes.forEach(i => {
+      const amtStr = i.amount.toFixed(2).replace('.', ',');
+      csv += `"Ingresos";"${i.type === 'salary' ? 'Sueldo' : 'Extra'}";"Ingreso";"${i.date}";"${(i.description || 'Ingreso').replace(/"/g, '""')}";${amtStr}\n`;
+    });
+
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Nuevos_Movimientos_App.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -89,11 +122,40 @@ export default function ConfiguracionPage() {
         <h1 className="page-title">⚙️ Configuración</h1>
       </div>
 
+      {/* 🔒 Seguridad y Acceso por PIN */}
+      <div className="card animate-in" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>🔒 Seguridad y Bloqueo de App</h2>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+          Protegé tu app con PIN de acceso para cuando esté publicada en Vercel.
+        </p>
+
+        <div className="form-group">
+          <label className="form-label">PIN de acceso (Defecto: 1234)</label>
+          <input
+            type="password"
+            className="form-input"
+            value={pin}
+            onChange={e => setPin(e.target.value)}
+            placeholder="1234"
+            maxLength={8}
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-primary" onClick={handleSavePin}>
+            {savedPinToast ? '✅ ¡PIN Guardado!' : '💾 Cambiar PIN'}
+          </button>
+          <button className="btn btn-ghost" style={{ color: '#ef4444' }} onClick={handleLogoutApp}>
+            🚪 Bloquear App
+          </button>
+        </div>
+      </div>
+
       {/* Clave de Gemini AI */}
       <div className="card animate-in">
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>🤖 Clave de Inteligencia Artificial (Gemini)</h2>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-          Ingresá tu API Key gratuita de Google Gemini para habilitar el análisis en lenguaje natural de la pantalla de inicio.
+          Ingresá tu API Key gratuita de Google Gemini para habilitar el análisis en lenguaje natural.
         </p>
 
         <div className="form-group">
@@ -111,10 +173,47 @@ export default function ConfiguracionPage() {
         <button id="save-key-btn" className="btn btn-primary" onClick={handleSaveKey}>
           {savedKey ? '✅ ¡Guardada con éxito!' : '💾 Guardar API Key'}
         </button>
+      </div>
 
-        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, textAlign: 'center' }}>
-          Consíguela gratis en Google AI Studio (airstudio.google.com)
+      {/* URL de Google Apps Script */}
+      <p className="section-title">Sincronización con Google Sheets</p>
+      <div className="card card-accent" style={{ marginBottom: 16 }}>
+        <div className="form-group">
+          <label className="form-label">URL de tu Web App en Google Apps Script</label>
+          <input
+            className="form-input"
+            value={appsScriptUrl}
+            onChange={e => setAppsScriptUrl(e.target.value)}
+            placeholder="https://script.google.com/macros/s/..."
+          />
+        </div>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            localStorage.setItem('apps_script_url', appsScriptUrl.trim());
+            setSavedScriptUrl(true);
+            setTimeout(() => setSavedScriptUrl(false), 2000);
+          }}
+        >
+          {savedScriptUrl ? '✅ ¡URL Guardada!' : '💾 Guardar URL de Sheets'}
+        </button>
+      </div>
+
+      {/* Carga de Datos Históricos */}
+      <p className="section-title">Importación de Datos Históricos</p>
+      <div className="card card-accent" style={{ marginBottom: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>📊 Restaurar historial completo (267 gastos reales)</p>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          Recuperá todos tus registros reales desduplicados de tus planillas de Excel 2025 y 2026.
         </p>
+        <button
+          id="reload-history-btn"
+          className="btn btn-success"
+          onClick={handleReloadHistory}
+          disabled={loadingHistory}
+        >
+          {loadingHistory ? '🔄 Cargando...' : '⚡ Cargar Historial Completo (267 gastos reales)'}
+        </button>
       </div>
 
       {/* Resumen de base de datos */}
@@ -136,21 +235,91 @@ export default function ConfiguracionPage() {
         </div>
       </div>
 
-      {/* Copia de seguridad */}
-      <p className="section-title">Copia de seguridad (Backup)</p>
+      {/* Exportación para Google Sheets en 2 hojas */}
+      <p className="section-title">Google Sheets & Copias de seguridad</p>
       <div className="card">
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-          Tus datos se guardan en el navegador de tu dispositivo. Exportá una copia para resguardarlos.
+          Mantené tu Google Sheets organizado en dos mundos separados: tu hoja histórica y los nuevos ingresos/gastos generados por la app.
         </p>
 
-        <button id="export-json-btn" className="btn btn-ghost" onClick={handleExportData} disabled={exporting} style={{ marginBottom: 10 }}>
-          📥 {exporting ? 'Exportando...' : 'Exportar datos a JSON'}
+        <a
+          href="/Gastos_Consolidados_IMPORTAR_SHEETS.csv"
+          download="Gastos_Consolidados_IMPORTAR_SHEETS.csv"
+          className="btn btn-primary"
+          style={{ marginBottom: 10, textDecoration: 'none' }}
+        >
+          📁 1. Descargar Hoja Maestra Histórica (267 gastos)
+        </a>
+
+        <button
+          id="download-new-movements-btn"
+          className="btn btn-ghost"
+          style={{ marginBottom: 10 }}
+          onClick={handleDownloadNewMovementsCSV}
+        >
+          📄 2. Descargar Hoja de Nuevos Movimientos App (.csv)
         </button>
 
-        <label className="btn btn-ghost" style={{ cursor: 'pointer' }}>
-          📤 Importar desde JSON
-          <input type="file" accept=".json" onChange={handleImportData} style={{ display: 'none' }} />
-        </label>
+        <button id="export-json-btn" className="btn btn-ghost" onClick={handleExportData} disabled={exporting}>
+          📥 {exporting ? 'Exportando...' : 'Exportar Backup completo a JSON'}
+        </button>
+      </div>
+
+      {/* ─── Logs de Sincronización con Sheets ─── */}
+      <div className="card" style={{ marginTop: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <p className="section-title" style={{ margin: 0 }}>🔍 Logs de Sincronización (Sheets)</p>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              clearSyncLogs();
+              setSyncLogs([]);
+            }}
+          >
+            🗑️ Limpiar
+          </button>
+        </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ marginBottom: 10 }}
+          onClick={() => setSyncLogs(getSyncLogs())}
+        >
+          🔄 Actualizar Logs
+        </button>
+
+        {syncLogs.length === 0 ? (
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin intentos de sincronización registrados aún.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
+            {syncLogs.slice(0, 30).map((log, i) => (
+              <div
+                key={i}
+                style={{
+                  background: log.status === 'ENVIADO' ? 'rgba(34,197,94,0.08)'
+                    : log.status === 'ERROR_RED' ? 'rgba(239,68,68,0.08)'
+                    : 'rgba(245,158,11,0.08)',
+                  border: `1px solid ${log.status === 'ENVIADO' ? '#22c55e33' : log.status === 'ERROR_RED' ? '#ef444433' : '#f59e0b33'}`,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  fontSize: 11,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                  <span style={{ fontWeight: 700, color: log.status === 'ENVIADO' ? '#22c55e' : log.status === 'ERROR_RED' ? '#ef4444' : '#f59e0b' }}>
+                    {log.status === 'ENVIADO' ? '✅' : log.status === 'ERROR_RED' ? '❌' : '⚠️'} {log.status}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {log.action.toUpperCase()} · ID #{log.expenseId}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  {new Date(log.ts).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' })}
+                  {log.error ? <span style={{ color: '#ef4444', display: 'block', marginTop: 2 }}>⚠️ {log.error}</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </>
   );
