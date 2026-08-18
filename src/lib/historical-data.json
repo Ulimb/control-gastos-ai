@@ -6078,6 +6078,171 @@
       "sync_status": "pending",
       "created_at": "2026-08-11T23:01:39.309Z",
       "updated_at": "2026-08-11T23:01:39.309Z"
+    },
+    {
+      "id": 275,
+      "date": "2026-06-01",
+      "category_id": 3,
+      "subcategory_id": 11,
+      "store": "axion",
+      "detail": "Nafta 2190 x L",
+      "amount": 77000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 276,
+      "date": "2026-06-03",
+      "category_id": 2,
+      "subcategory_id": 6,
+      "store": "Movistar",
+      "detail": "celular",
+      "amount": 12500,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 277,
+      "date": "2026-06-06",
+      "category_id": 6,
+      "subcategory_id": 25,
+      "store": "",
+      "detail": "Cena con amigo",
+      "amount": 27000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 278,
+      "date": "2026-06-06",
+      "category_id": 5,
+      "subcategory_id": 20,
+      "store": "La Braseria",
+      "detail": "Cena de aniversario",
+      "amount": 109500,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 279,
+      "date": "2026-06-08",
+      "category_id": 8,
+      "subcategory_id": 38,
+      "store": "ATM Seguros",
+      "detail": "Seguro del auto",
+      "amount": 83126,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 280,
+      "date": "2026-06-08",
+      "category_id": 6,
+      "subcategory_id": 26,
+      "store": "Mercado Libre",
+      "detail": "Silla de comer para bebe",
+      "amount": 144000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 281,
+      "date": "2026-06-09",
+      "category_id": 1,
+      "subcategory_id": 1,
+      "store": "Zhaotan,fang",
+      "detail": "Ingredientes para sushi",
+      "amount": 17700,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 282,
+      "date": "2026-06-10",
+      "category_id": 0,
+      "subcategory_id": 0,
+      "store": "",
+      "detail": "Llavero del hincha",
+      "amount": 5000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 283,
+      "date": "2026-06-10",
+      "category_id": 6,
+      "subcategory_id": 25,
+      "store": "",
+      "detail": "Juntada casa de amigos",
+      "amount": 15000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 284,
+      "date": "2026-06-13",
+      "category_id": 1,
+      "subcategory_id": 1,
+      "store": "Autoservicio Mar",
+      "detail": "Compra en autoservicio",
+      "amount": 14340,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 285,
+      "date": "2026-06-13",
+      "category_id": 2,
+      "subcategory_id": 7,
+      "store": "Spotify",
+      "detail": "Suscripción de Spotify junio",
+      "amount": 8413.47,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 286,
+      "date": "2026-06-17",
+      "category_id": 5,
+      "subcategory_id": 20,
+      "store": "",
+      "detail": "Hamburguesas (Sabri)",
+      "amount": 72000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 287,
+      "date": "2026-06-18",
+      "category_id": 0,
+      "subcategory_id": 0,
+      "store": "",
+      "detail": "Prode del mundial ⚠️",
+      "amount": 10000,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 288,
+      "date": "2026-06-19",
+      "category_id": 7,
+      "subcategory_id": 29,
+      "store": "Ágape",
+      "detail": "ropa",
+      "amount": 101500,
+      "notes": "",
+      "status": "active"
+    },
+    {
+      "id": 289,
+      "date": "2026-06-19",
+      "category_id": 6,
+      "subcategory_id": 25,
+      "store": "Zhaotan Fang (fizarmarket)",
+      "detail": "Vino para juntada con ex compañeros",
+      "amount": 9000,
+      "notes": "",
+      "status": "active"
     }
   ],
   "fixed_expenses": []
