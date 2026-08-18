@@ -12,11 +12,35 @@ export interface AIParseResult {
 }
 
 const DEFAULT_GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
-const GEMINI_MODEL = 'models/gemini-3.5-flash';
+const CANDIDATE_MODELS = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-pro'];
 
-function getApiKey(): string | null {
-  if (typeof window === 'undefined') return DEFAULT_GEMINI_API_KEY;
+export function getApiKey(): string | null {
+  if (typeof window === 'undefined') return DEFAULT_GEMINI_API_KEY || null;
   return localStorage.getItem('gemini_api_key') || DEFAULT_GEMINI_API_KEY || null;
+}
+
+export async function testGeminiKey(customKey?: string): Promise<{ ok: boolean; message: string }> {
+  const key = customKey || getApiKey();
+  if (!key) {
+    return { ok: false, message: 'No hay ninguna API Key ingresada.' };
+  }
+
+  const genAI = new GoogleGenerativeAI(key);
+  let lastError = '';
+
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent('Responde solo "OK"');
+      if (result && result.response) {
+        return { ok: true, message: `Conexión exitosa con ${modelName} ✅` };
+      }
+    } catch (e: any) {
+      lastError = e.message || String(e);
+    }
+  }
+
+  return { ok: false, message: `Error de autenticación: ${lastError}` };
 }
 
 function parseNumericAmount(val: any): number {
@@ -47,7 +71,9 @@ export async function parseExpenseWithAI(
   overrideDate?: string
 ): Promise<AIParseResult | null> {
   const apiKey = getApiKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    throw new Error('Falta configurar tu Gemini API Key en Configuración ⚙️');
+  }
 
   const today = overrideDate || new Date().toISOString().split('T')[0];
   const catList = categories
@@ -81,29 +107,36 @@ Devolvé ÚNICAMENTE un JSON válido sin markdown:
   "confidence": <número entre 0 y 1>
 }`;
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await model.generateContent(prompt);
-    const raw = result.response.text().trim();
+  const genAI = new GoogleGenerativeAI(apiKey);
+  let lastErr = null;
 
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(prompt);
+      const raw = result.response.text().trim();
 
-    return {
-      amount: parseNumericAmount(parsed.amount),
-      detail: parsed.detail || text,
-      store: parsed.store || '',
-      date: parsed.date || today,
-      categoryId: parsed.category_id || categories[0]?.id || 1,
-      subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
-      confidence: parsed.confidence || 0.5,
-      raw,
-    };
-  } catch (err) {
-    console.error('Error AI parse:', err);
-    return null;
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+
+      return {
+        amount: parseNumericAmount(parsed.amount),
+        detail: parsed.detail || text,
+        store: parsed.store || '',
+        date: parsed.date || today,
+        categoryId: parsed.category_id || categories[0]?.id || 1,
+        subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+        confidence: parsed.confidence || 0.5,
+        raw,
+      };
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Modelo ${modelName} falló:`, err);
+    }
   }
+
+  console.error('Error AI parse todos los modelos fallaron:', lastErr);
+  throw new Error('No se pudo conectar con Gemini AI. Verificá tu API Key en Configuración.');
 }
 
 export async function parseTicketImageWithAI(
@@ -113,7 +146,9 @@ export async function parseTicketImageWithAI(
   overrideDate?: string
 ): Promise<AIParseResult | null> {
   const apiKey = getApiKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    throw new Error('Falta configurar tu Gemini API Key en Configuración ⚙️');
+  }
 
   const today = overrideDate || new Date().toISOString().split('T')[0];
   const catList = categories
@@ -147,36 +182,42 @@ Devolvé ÚNICAMENTE un JSON válido sin markdown:
   "confidence": <número entre 0 y 1>
 }`;
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const imagePart = {
+    inlineData: {
+      data: cleanBase64,
+      mimeType: mimeType,
+    },
+  };
 
-    const imagePart = {
-      inlineData: {
-        data: cleanBase64,
-        mimeType: mimeType,
-      },
-    };
+  let lastErr = null;
 
-    const result = await model.generateContent([prompt, imagePart]);
-    const raw = result.response.text().trim();
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent([prompt, imagePart]);
+      const raw = result.response.text().trim();
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
 
-    return {
-      amount: parseNumericAmount(parsed.amount),
-      store: parsed.store || '',
-      detail: parsed.detail || 'Compra comprobante',
-      date: parsed.date || today,
-      categoryId: parsed.category_id || categories[0]?.id || 1,
-      subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
-      confidence: parsed.confidence || 0.8,
-      raw,
-    };
-  } catch (err) {
-    console.error('Error AI Vision parse:', err);
-    return null;
+      return {
+        amount: parseNumericAmount(parsed.amount),
+        store: parsed.store || '',
+        detail: parsed.detail || 'Compra comprobante',
+        date: parsed.date || today,
+        categoryId: parsed.category_id || categories[0]?.id || 1,
+        subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+        confidence: parsed.confidence || 0.8,
+        raw,
+      };
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Vision modelo ${modelName} falló:`, err);
+    }
   }
+
+  console.error('Error AI Vision parse:', lastErr);
+  throw new Error('No se pudo procesar la foto con IA. Verificá tu API Key.');
 }
 
 export async function categorizePendingExpensesWithAI(
@@ -184,43 +225,51 @@ export async function categorizePendingExpensesWithAI(
   categories: Array<{ id: number; name: string; subcategories: Array<{ id: number; name: string }> }>
 ): Promise<Array<{ id: number; categoryId: number; subcategoryId: number }> | null> {
   const apiKey = getApiKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    throw new Error('Falta configurar tu Gemini API Key en Configuración ⚙️');
+  }
 
   const catList = categories
     .map(c => `${c.id}:${c.name} [${c.subcategories.map(s => `${s.id}:${s.name}`).join(', ')}]`)
     .join('\n');
 
-  const itemsList = pendingExpenses.map(e => `ID ${e.id}: "${e.detail}" ($${e.amount})`).join('\n');
+  const pendingList = pendingExpenses
+    .map(e => `ID:${e.id} | Detalle:${e.detail} | Monto:${e.amount} | Fecha:${e.date}`)
+    .join('\n');
 
-  const prompt = `Sos un asistente de finanzas personales argentino. Asigná la categoría y subcategoría más adecuada para cada uno de estos gastos pendientes y devolvé SOLO un JSON válido sin markdown.
+  const prompt = `Sos un asistente experto de finanzas personales. Categorizá los siguientes gastos pendientes según las categorías disponibles:
 
-Lista de gastos pendientes:
-${itemsList}
-
-Categorías disponibles (formato id:nombre [subcategorías]):
+Categorías disponibles:
 ${catList}
 
-Devolvé exactamente este formato de array JSON:
+Gastos a categorizar:
+${pendingList}
+
+Devolvé ÚNICAMENTE un array JSON sin markdown:
 [
-  { "id": <id numérico del gasto>, "category_id": <id de categoría>, "subcategory_id": <id de subcategoría> }
+  { "id": <id_del_gasto>, "category_id": <id_categoria>, "subcategory_id": <id_subcategoria> }
 ]`;
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const genAI = new GoogleGenerativeAI(apiKey);
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(prompt);
+      const raw = result.response.text().trim();
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
 
-    const result = await model.generateContent(prompt);
-    const raw = result.response.text().trim();
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-
-    return parsed.map((item: any) => ({
-      id: item.id,
-      categoryId: item.category_id || categories[0]?.id || 1,
-      subcategoryId: item.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
-    }));
-  } catch (err) {
-    console.error('Error batch categorize:', err);
-    return null;
+      if (Array.isArray(parsed)) {
+        return parsed.map((item: any) => ({
+          id: item.id,
+          categoryId: item.category_id || 1,
+          subcategoryId: item.subcategory_id || 1,
+        }));
+      }
+    } catch (err) {
+      console.warn(`Batch categorize modelo ${modelName} falló:`, err);
+    }
   }
+
+  throw new Error('Error al categorizar en lote.');
 }

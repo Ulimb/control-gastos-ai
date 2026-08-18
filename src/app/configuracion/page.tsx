@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, seedDatabase, getSyncLogs, clearSyncLogs, syncFromSheets } from '@/lib/db';
 import type { SyncLogEntry, SheetsImportResult } from '@/lib/db';
+import { testGeminiKey } from '@/lib/ai';
 
 export default function ConfiguracionPage() {
   const [apiKey, setApiKey] = useState('');
@@ -18,6 +19,8 @@ export default function ConfiguracionPage() {
   const [importingFromSheets, setImportingFromSheets] = useState(false);
   const [importProgress, setImportProgress] = useState('');
   const [importResult, setImportResult] = useState<SheetsImportResult | null>(null);
+  const [testingKey, setTestingKey] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -42,6 +45,14 @@ export default function ConfiguracionPage() {
     localStorage.setItem('gemini_api_key', apiKey.trim());
     setSavedKey(true);
     setTimeout(() => setSavedKey(false), 2000);
+  };
+
+  const handleTestKey = async () => {
+    setTestingKey(true);
+    setTestResult(null);
+    const res = await testGeminiKey(apiKey.trim());
+    setTestResult(res);
+    setTestingKey(false);
   };
 
   const handleSavePin = () => {
@@ -227,9 +238,38 @@ export default function ConfiguracionPage() {
           />
         </div>
 
-        <button id="save-key-btn" className="btn btn-primary" onClick={handleSaveKey}>
-          {savedKey ? '✅ ¡Guardada con éxito!' : '💾 Guardar API Key'}
-        </button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button id="save-key-btn" className="btn btn-primary" onClick={handleSaveKey}>
+            {savedKey ? '✅ ¡Guardada con éxito!' : '💾 Guardar API Key'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ background: 'var(--bg-elevated)' }}
+            onClick={handleTestKey}
+            disabled={testingKey || !apiKey.trim()}
+          >
+            {testingKey ? '⏳ Probando...' : '🧪 Probar Conexión'}
+          </button>
+        </div>
+
+        {testResult && (
+          <p style={{
+            fontSize: 13,
+            fontWeight: 600,
+            marginTop: 10,
+            color: testResult.ok ? '#22c55e' : '#ef4444',
+          }}>
+            {testResult.message}
+          </p>
+        )}
+
+        <div style={{ marginTop: 14, padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 10, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          💡 <strong>¿Cómo obtener tu clave 100% gratuita?</strong><br />
+          1. Entrá a <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline', fontWeight: 600 }}>Google AI Studio (aistudio.google.com)</a><br />
+          2. Hacé clic en <strong>"Create API Key"</strong>.<br />
+          3. Copiá la clave que empieza con <code>AIzaSy...</code>, pegala acá arriba y tocá <strong>Guardar API Key</strong>.
+        </div>
       </div>
 
       {/* URL de Google Apps Script */}

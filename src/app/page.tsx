@@ -140,31 +140,35 @@ export default function HomePage() {
     if (!text.trim() && !imageBase64) return;
     setLoading(true);
 
-    let result = null;
-    if (imageBase64) {
-      result = await parseTicketImageWithAI(imageBase64, text, categories, date);
-    } else {
-      result = await parseExpenseWithAI(text, categories, date);
-    }
+    try {
+      let result = null;
+      if (imageBase64) {
+        result = await parseTicketImageWithAI(imageBase64, text, categories, date);
+      } else {
+        result = await parseExpenseWithAI(text, categories, date);
+      }
 
-    setLoading(false);
-
-    if (result) {
-      setAmount(result.amount > 0 ? result.amount.toString() : '');
-      setStore(result.store || '');
-      setDetail(result.detail || '');
-      setDate(result.date);
-      // Pre-seleccionamos la categoría y subcategoría sugeridas por la IA para revisar en la vista previa
-      setSelectedCatId(result.categoryId || null);
-      setSelectedSubId(result.subcategoryId || null);
-    } else {
+      if (result) {
+        setAmount(result.amount > 0 ? result.amount.toString() : '');
+        setStore(result.store || '');
+        setDetail(result.detail || '');
+        setDate(result.date);
+        setSelectedCatId(result.categoryId || null);
+        setSelectedSubId(result.subcategoryId || null);
+        setShowModal(true);
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Error al procesar con IA. Verificá tu API Key en Configuración.';
+      showToast(`⚠️ ${msg}`, 'error', 6000);
       setAmount('');
       setStore('');
       setDetail(text || '');
       setSelectedCatId(null);
       setSelectedSubId(null);
+      setShowModal(true);
+    } finally {
+      setLoading(false);
     }
-    setShowModal(true);
   };
 
   const handleOpenEdit = (exp: any) => {
