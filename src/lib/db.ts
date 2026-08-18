@@ -308,7 +308,7 @@ export function formatARS(value: number): string {
   }).format(value || 0);
 }
 
-export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxcSb43RiRBAvy6ksZXg-iF2aL9vsvbHH5T1NyV0GUOqUidq8bnoJbZ0yf0DsgzQfURwg/exec';
+export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw7qrmfKJ7D9kzwbytnvu4LBCw0ps2L0X-58NWvv0fT2KQITh-fTOqwVk9FCcPlgGyQuA/exec';
 
 // ─── Logging de sincronización ────────────────────────────────────────────────
 

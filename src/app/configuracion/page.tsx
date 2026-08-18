@@ -22,7 +22,7 @@ export default function ConfiguracionPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setApiKey(localStorage.getItem('gemini_api_key') || process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
-      setAppsScriptUrl(localStorage.getItem('apps_script_url') || 'https://script.google.com/macros/s/AKfycbxcSb43RiRBAvy6ksZXg-iF2aL9vsvbHH5T1NyV0GUOqUidq8bnoJbZ0yf0DsgzQfURwg/exec');
+      setAppsScriptUrl(localStorage.getItem('apps_script_url') || 'https://script.google.com/macros/s/AKfycbw7qrmfKJ7D9kzwbytnvu4LBCw0ps2L0X-58NWvv0fT2KQITh-fTOqwVk9FCcPlgGyQuA/exec');
       setPin(localStorage.getItem('app_pin') || '1234');
       setSyncLogs(getSyncLogs());
     }
