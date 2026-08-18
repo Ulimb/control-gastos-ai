@@ -420,3 +420,121 @@ export async function syncMovementToGoogleSheets(movement: {
 }) {
   await syncToSheets('add', movement.expenseId || 0, movement);
 }
+
+// ─── Importar desde Google Sheets → IndexedDB ────────────────────────────────
+
+export interface SheetsImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+export async function syncFromSheets(progressCallback?: (msg: string) => void): Promise<SheetsImportResult> {
+  const result: SheetsImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
+  const url = customUrl || APPS_SCRIPT_URL;
+
+  if (!url) {
+    result.errors.push('Sin URL de Apps Script configurada');
+    return result;
+  }
+
+  progressCallback?.('📡 Conectando con Google Sheets...');
+
+  try {
+    // Usamos un proxy CORS-safe: el Apps Script expone un doGet que devuelve JSON con todos los movimientos
+    const response = await fetch(`${url}?action=get_all_expenses`, {
+      method: 'GET',
+      cache: 'no-cache',
+    });
+
+    if (!response.ok) {
+      result.errors.push(`Error HTTP: ${response.status}`);
+      return result;
+    }
+
+    const data = await response.json();
+
+    if (data.status !== 'ok' || !Array.isArray(data.rows)) {
+      result.errors.push(data.message || 'Respuesta inválida del servidor');
+      return result;
+    }
+
+    const rows: any[] = data.rows;
+    progressCallback?.(`📦 ${rows.length} registros encontrados en Sheets. Sincronizando...`);
+
+    // Obtener categorías para resolver nombres a IDs
+    const cats = await db.categories.toArray();
+    const subs = await db.subcategories.toArray();
+
+    const catByName = Object.fromEntries(cats.map(c => [c.name.toLowerCase().trim(), c.id]));
+    const subByName = Object.fromEntries(subs.map(s => [s.name.toLowerCase().trim(), s.id]));
+
+    for (const row of rows) {
+      try {
+        const sheetId = parseInt(row.id);
+        if (!sheetId || isNaN(sheetId)) { result.skipped++; continue; }
+
+        // Parsear monto: soporta formato argentino "77.000" o "77000" o "8.413,47"
+        let amount = 0;
+        const rawMonto = String(row.monto || '0').replace(/[$ ]/g, '').trim();
+        if (rawMonto.includes(',')) {
+          // Formato "8.413,47" → 8413.47
+          amount = parseFloat(rawMonto.replace(/\./g, '').replace(',', '.'));
+        } else if (rawMonto.includes('.') && rawMonto.split('.').length === 2 && rawMonto.split('.')[1].length === 3) {
+          // Formato "77.000" → 77000
+          amount = parseFloat(rawMonto.replace('.', ''));
+        } else {
+          amount = parseFloat(rawMonto) || 0;
+        }
+
+        // Resolver categoría/subcategoría por nombre
+        const catName = (row.categoria || '').toLowerCase().trim();
+        const subName = (row.subcategoria || '').toLowerCase().trim();
+        const category_id = catByName[catName] || 0;
+        const subcategory_id = subByName[subName] || 0;
+
+        const expenseData: Expense = {
+          id: sheetId,
+          date: row.fecha || new Date().toISOString().split('T')[0],
+          amount,
+          store: row.comercio || '',
+          detail: row.detalle || '',
+          notes: row.notas || '',
+          category_id,
+          subcategory_id,
+          status: 'active',
+          module_origin: 'sheets_import',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        // Verificar si ya existe en IndexedDB
+        const existing = await db.expenses.get(sheetId);
+        if (existing) {
+          // Actualizar solo si el monto o detalle cambió
+          if (existing.amount !== amount || existing.detail !== expenseData.detail || existing.store !== expenseData.store) {
+            await db.expenses.put(expenseData);
+            result.updated++;
+          } else {
+            result.skipped++;
+          }
+        } else {
+          await db.expenses.put(expenseData);
+          result.imported++;
+        }
+      } catch (rowErr) {
+        result.errors.push(`Fila ID ${row.id}: ${String(rowErr)}`);
+      }
+    }
+
+    progressCallback?.(`✅ Sincronización completa: ${result.imported} nuevos, ${result.updated} actualizados, ${result.skipped} sin cambios`);
+  } catch (err) {
+    result.errors.push(`Error de red: ${String(err)}`);
+    progressCallback?.('❌ Error de conexión con Google Sheets');
+  }
+
+  return result;
+}

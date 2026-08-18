@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { db, seedDatabase, getSyncLogs, clearSyncLogs } from '@/lib/db';
-import type { SyncLogEntry } from '@/lib/db';
+import { db, seedDatabase, getSyncLogs, clearSyncLogs, syncFromSheets } from '@/lib/db';
+import type { SyncLogEntry, SheetsImportResult } from '@/lib/db';
 
 export default function ConfiguracionPage() {
   const [apiKey, setApiKey] = useState('');
@@ -15,6 +15,9 @@ export default function ConfiguracionPage() {
   const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>([]);
   const [pin, setPin] = useState('1234');
   const [savedPinToast, setSavedPinToast] = useState(false);
+  const [importingFromSheets, setImportingFromSheets] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
+  const [importResult, setImportResult] = useState<SheetsImportResult | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -50,6 +53,16 @@ export default function ConfiguracionPage() {
   const handleLogoutApp = () => {
     sessionStorage.removeItem('app_auth');
     window.location.reload();
+  };
+
+  const handleImportFromSheets = async () => {
+    setImportingFromSheets(true);
+    setImportResult(null);
+    setImportProgress('');
+    const result = await syncFromSheets((msg) => setImportProgress(msg));
+    setImportResult(result);
+    setImportingFromSheets(false);
+    await loadStats();
   };
 
   const handleReloadHistory = async () => {
@@ -149,6 +162,50 @@ export default function ConfiguracionPage() {
             🚪 Bloquear App
           </button>
         </div>
+      </div>
+
+      {/* ⬇️ Importar / Sincronizar desde Google Sheets */}
+      <p className="section-title">Sincronización con Google Sheets</p>
+      <div className="card animate-in" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>⬇️ Importar datos desde Google Sheets</h2>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+          Importa todos los gastos de tu hoja de cálculo hacia esta app. Útil cuando usás la app en un dispositivo nuevo o querés sincronizar cambios hechos directamente en Sheets.
+        </p>
+
+        <button
+          className="btn btn-primary"
+          onClick={handleImportFromSheets}
+          disabled={importingFromSheets}
+          style={{ marginBottom: 12 }}
+        >
+          {importingFromSheets ? '⏳ Importando...' : '⬇️ Importar desde Google Sheets'}
+        </button>
+
+        {importProgress && (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '8px 0' }}>
+            {importProgress}
+          </p>
+        )}
+
+        {importResult && (
+          <div style={{
+            background: importResult.errors.length > 0 ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+            border: `1px solid ${importResult.errors.length > 0 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+            borderRadius: 10,
+            padding: '12px 14px',
+            fontSize: 13,
+          }}>
+            <p style={{ fontWeight: 700, marginBottom: 6 }}>Resultado de la sincronización:</p>
+            <p>✅ <strong>{importResult.imported}</strong> gastos nuevos importados</p>
+            <p>🔄 <strong>{importResult.updated}</strong> gastos actualizados</p>
+            <p>⏭️ <strong>{importResult.skipped}</strong> sin cambios</p>
+            {importResult.errors.length > 0 && (
+              <p style={{ color: '#ef4444', marginTop: 6 }}>
+                ⚠️ {importResult.errors.length} error(es): {importResult.errors[0]}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Clave de Gemini AI */}
