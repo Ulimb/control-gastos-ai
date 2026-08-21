@@ -275,27 +275,58 @@ Texto del usuario a analizar: "${text}"`;
   return parseLocalHeuristic(text, categories, today);
 }
 
-export async function parseTicketImageWithAI(
-  imageBase64: string,
+export interface ParsedItem {
+  detail: string;
+  amount: number;
+  store?: string;
+  categoryId: number;
+  subcategoryId: number;
+  notes?: string;
+  confidence?: number;
+}
+
+export interface MultiItemParseResult {
+  isMultiItem: boolean;
+  store: string;
+  date: string;
+  items: ParsedItem[];
+  totalDetected?: number;
+  cartTotalItemsExpected?: number;
+  discounts?: number;
+  shipping?: number;
+  raw?: string;
+}
+
+export async function parseTicketImagesWithAI(
+  imagesBase64: string[],
   textPrompt: string,
   categories: Array<{ id: number; name: string; subcategories: Array<{ id: number; name: string }> }>,
   overrideDate?: string
-): Promise<AIParseResult | null> {
+): Promise<MultiItemParseResult> {
   const apiKey = getApiKey();
+  const today = overrideDate || new Date().toISOString().split('T')[0];
+
   if (!apiKey) {
     throw new Error('Falta configurar tu Gemini API Key en Configuración ⚙️');
   }
 
-  const today = overrideDate || new Date().toISOString().split('T')[0];
   const catList = categories
     .map(c => `${c.id}:${c.name} [${c.subcategories.map(s => `${s.id}:${s.name}`).join(', ')}]`)
     .join('\n');
 
-  const mimeMatch = imageBase64.match(/^data:(image\/[a-zA-Z+]+);base64,/);
-  const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-  const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+  const imageParts = imagesBase64.map(b64 => {
+    const mimeMatch = b64.match(/^data:(image\/[a-zA-Z+]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const cleanBase64 = b64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+    return {
+      inlineData: {
+        data: cleanBase64,
+        mimeType: mimeType,
+      },
+    };
+  });
 
-  const prompt = `Sos un asistente experto de finanzas personales argentino. Analizá esta imagen de ticket, comprobante o factura junto con la aclaración de texto (si la hay).
+  const prompt = `Sos un asistente experto de finanzas personales argentino. Analizá estas ${imagesBase64.length} capturas o fotos (tickets, facturas, comprobantes o capturas de carrito de compras como MercadoLibre) junto con cualquier aclaración del usuario.
 
 Aclaración del usuario: "${textPrompt || 'Sin aclaración adicional'}"
 Fecha actual de referencia: ${today}
@@ -303,29 +334,45 @@ Fecha actual de referencia: ${today}
 Categorías disponibles:
 ${catList}
 
-Reglas estrictas para el monto:
-- "amount": Debe ser el MONTO TOTAL como NÚMERO flotante puro sin separadores de miles.
-- NUNCA uses puntos de miles. Si el comprobante dice "$1.250,00", el valor devuelto debe ser 1250.00.
+INSTRUCCIONES CLAVE:
+1. DETECCIÓN MULTI-ARTÍCULO / CARRITO:
+   - Si la o las imágenes muestran un carrito de compras (ej: MercadoLibre con "Carrito (N)"), o un ticket de supermercado/factura con múltiples productos:
+     * Extraé CADA PRODUCTO o artículo como un ítem individual en la lista "items".
+     * "detail": Nombre claro del producto con su variante o especificación (ej: "Kong Classic Large Juguete Perros Rojo L", "Suplemento Polvo L-Glicina 500g", "Collar Táctico Lila").
+     * "amount": El precio unitario o final de ese producto específico (número flotante sin puntos de miles, ej: 37520.25, 14999.00, 23900).
+     * "store": Nombre del comercio o plataforma (ej: "MercadoLibre", "Coto", "Farmacity").
+     * "category_id" y "subcategory_id": Elegí la categoría y subcategoría más adecuada para CADA producto específico de la lista.
+   - Detectá si hay un contador de artículos en la cabecera (ej: "Carrito (6)") y ponelo en "cart_total_items_expected": 6.
+   - "total_amount": El importe total final pagado o facturado que figura al pie del carrito o ticket (ej: 205732.43).
+   - "discounts": Total de cupones o descuentos generales detectados.
+   - "shipping": Costo de envío si figura (0 si es gratis).
 
-Devolvé ÚNICAMENTE un JSON válido sin markdown:
+2. SI ES UN TICKET SIMPLE DE 1 SOLO GASTO GENERAL:
+   - Devolvé "is_multi_item": false y un solo elemento en "items".
+
+Devolvé ÚNICAMENTE un JSON válido con esta estructura:
 {
-  "amount": <monto numérico>,
-  "store": "<nombre del comercio/empresa del ticket, ej: Coto, YPF, Spotify, Farmacity>",
-  "detail": "<descripción de los ítems comprados o servicio>",
-  "date": "<fecha del comprobante en YYYY-MM-DD o ${today}>",
-  "category_id": <id de categoría>,
-  "subcategory_id": <id de subcategoría>,
-  "confidence": <número entre 0 y 1>
+  "is_multi_item": true,
+  "store": "<comercio general, ej: MercadoLibre>",
+  "date": "${today}",
+  "cart_total_items_expected": <número total de ítems del carrito si figura, ej: 6, o null>,
+  "total_amount": <monto total final del carrito o ticket>,
+  "discounts": <monto de cupones o descuentos generales>,
+  "shipping": <costo de envío o 0>,
+  "items": [
+    {
+      "detail": "<nombre del producto>",
+      "store": "<comercio>",
+      "amount": <monto numérico sin puntos de miles>,
+      "category_id": <id>,
+      "subcategory_id": <id>,
+      "notes": "<notas breves si aplica>",
+      "confidence": 0.95
+    }
+  ]
 }`;
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const imagePart = {
-    inlineData: {
-      data: cleanBase64,
-      mimeType: mimeType,
-    },
-  };
-
   let lastErr = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -337,28 +384,73 @@ Devolvé ÚNICAMENTE un JSON válido sin markdown:
           temperature: 0.1,
         }
       });
-      const result = await model.generateContent([prompt, imagePart]);
+      const result = await model.generateContent([prompt, ...imageParts]);
       const raw = result.response.text().trim();
       const parsed = extractJsonFromResponse(raw);
 
+      const itemsList: ParsedItem[] = Array.isArray(parsed.items)
+        ? parsed.items.map((it: any) => ({
+            detail: it.detail || 'Producto',
+            store: it.store || parsed.store || '',
+            amount: parseNumericAmount(it.amount),
+            categoryId: it.category_id || categories[0]?.id || 1,
+            subcategoryId: it.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+            notes: it.notes || '',
+            confidence: it.confidence || 0.9,
+          }))
+        : [
+            {
+              detail: parsed.detail || 'Compra comprobante',
+              store: parsed.store || '',
+              amount: parseNumericAmount(parsed.amount || parsed.total_amount),
+              categoryId: parsed.category_id || categories[0]?.id || 1,
+              subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+              notes: parsed.notes || '',
+              confidence: 0.85,
+            },
+          ];
+
       return {
-        amount: parseNumericAmount(parsed.amount),
+        isMultiItem: parsed.is_multi_item === true || itemsList.length > 1,
         store: parsed.store || '',
-        detail: parsed.detail || 'Compra comprobante',
         date: parsed.date || today,
-        categoryId: parsed.category_id || categories[0]?.id || 1,
-        subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
-        confidence: parsed.confidence || 0.85,
+        items: itemsList,
+        totalDetected: parseNumericAmount(parsed.total_amount || parsed.amount),
+        cartTotalItemsExpected: parsed.cart_total_items_expected ? parseInt(parsed.cart_total_items_expected) : undefined,
+        discounts: parseNumericAmount(parsed.discounts),
+        shipping: parseNumericAmount(parsed.shipping),
         raw,
       };
     } catch (err) {
       lastErr = err;
-      console.warn(`Vision modelo ${modelName} falló:`, err);
+      console.warn(`Vision multi-imagen modelo ${modelName} falló:`, err);
     }
   }
 
-  console.error('Error AI Vision parse:', lastErr);
-  throw new Error('No se pudo procesar la foto con IA. Verificá tu API Key.');
+  console.error('Error AI Vision multi-imagen:', lastErr);
+  throw new Error('No se pudo procesar las fotos con IA. Verificá tu API Key.');
+}
+
+export async function parseTicketImageWithAI(
+  imageBase64: string,
+  textPrompt: string,
+  categories: Array<{ id: number; name: string; subcategories: Array<{ id: number; name: string }> }>,
+  overrideDate?: string
+): Promise<AIParseResult | null> {
+  const multi = await parseTicketImagesWithAI([imageBase64], textPrompt, categories, overrideDate);
+  const first = multi.items[0];
+  if (!first) return null;
+
+  return {
+    amount: first.amount,
+    store: first.store || multi.store || '',
+    detail: first.detail,
+    date: multi.date,
+    categoryId: first.categoryId,
+    subcategoryId: first.subcategoryId,
+    confidence: first.confidence || 0.85,
+    raw: multi.raw,
+  };
 }
 
 export async function categorizePendingExpensesWithAI(

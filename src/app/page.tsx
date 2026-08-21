@@ -2,14 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets } from '@/lib/db';
-import { parseExpenseWithAI, parseTicketImageWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
+import { parseExpenseWithAI, parseTicketImagesWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
+import type { ParsedItem } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
 
 export default function HomePage() {
   const [inputMode, setInputMode] = useState<'ai' | 'form'>('ai');
   const [text, setText] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imagesBase64, setImagesBase64] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [categories, setCategories] = useState<any[]>([]);
   const [recentExpenses, setRecentExpenses] = useState<any[]>([]);
@@ -24,7 +25,7 @@ export default function HomePage() {
     setTimeout(() => setToast(null), duration);
   };
 
-  // Formulario Directo / Modal de confirmación
+  // Formulario Directo / Modal de confirmación individual
   const [showModal, setShowModal] = useState(false);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [amount, setAmount] = useState('');
@@ -37,6 +38,24 @@ export default function HomePage() {
   const [saved, setSaved] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  // Modal de Desglose Multi-Artículo (ej: Carrito MercadoLibre / Ticket Super)
+  const [showMultiModal, setShowMultiModal] = useState(false);
+  const [multiItems, setMultiItems] = useState<ParsedItem[]>([]);
+  const [multiStore, setMultiStore] = useState('MercadoLibre');
+  const [multiDate, setMultiDate] = useState(new Date().toISOString().split('T')[0]);
+  const [multiTotalDetected, setMultiTotalDetected] = useState<number | null>(null);
+  const [multiCartExpected, setMultiCartExpected] = useState<number | null>(null);
+  const [multiSaving, setMultiSaving] = useState(false);
+
+  const addImages = (newImages: string[]) => {
+    setImagesBase64(prev => [...prev, ...newImages]);
+    showToast(newImages.length === 1 ? '📸 Foto adjuntada' : `📸 ${newImages.length} fotos adjuntadas`, 'success', 2500);
+  };
+
+  const removeImage = (index: number) => {
+    setImagesBase64(prev => prev.filter((_, i) => i !== index));
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -56,7 +75,9 @@ export default function HomePage() {
           if (file) {
             const reader = new FileReader();
             reader.onload = (evt) => {
-              setImageBase64(evt.target?.result as string);
+              if (evt.target?.result) {
+                addImages([evt.target.result as string]);
+              }
             };
             reader.readAsDataURL(file);
             break;
@@ -100,14 +121,44 @@ export default function HomePage() {
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      setImageBase64(evt.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        if (evt.target?.result) {
+          addImages([evt.target.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Reset value so user can pick the same file again if desired
+    e.target.value = '';
+  };
+
+  const handleTextareaPaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            if (evt.target?.result) {
+              addImages([evt.target.result as string]);
+            }
+          };
+          reader.readAsDataURL(file);
+          e.preventDefault();
+          break;
+        }
+      }
+    }
   };
 
   const handlePasteFromClipboardApi = async () => {
@@ -117,20 +168,24 @@ export default function HomePage() {
         return;
       }
       const items = await navigator.clipboard.read();
+      let found = false;
       for (const item of items) {
         const imageType = item.types.find(t => t.startsWith('image/'));
         if (imageType) {
           const blob = await item.getType(imageType);
           const reader = new FileReader();
           reader.onload = (evt) => {
-            setImageBase64(evt.target?.result as string);
-            showToast('📸 Foto pegada desde el portapapeles', 'success');
+            if (evt.target?.result) {
+              addImages([evt.target.result as string]);
+            }
           };
           reader.readAsDataURL(blob);
-          return;
+          found = true;
         }
       }
-      showToast('ℹ️ No hay ninguna foto en el portapapeles', 'info');
+      if (!found) {
+        showToast('ℹ️ No hay ninguna foto en el portapapeles', 'info');
+      }
     } catch {
       showToast('📋 Mantené presionado el cuadro de texto para PEGAR la foto', 'info', 4000);
     }
@@ -148,20 +203,49 @@ export default function HomePage() {
   };
 
   const handleAnalyze = async () => {
-    if (!text.trim() && !imageBase64) return;
+    if (!text.trim() && imagesBase64.length === 0) return;
     setLoading(true);
 
     // Limpiar datos anteriores antes de analizar
     resetForm();
 
+    const analysisDate = date || new Date().toISOString().split('T')[0];
+
     try {
-      let result = null;
-      if (imageBase64) {
-        result = await parseTicketImageWithAI(imageBase64, text, categories, new Date().toISOString().split('T')[0]);
-      } else {
-        result = await parseExpenseWithAI(text, categories, new Date().toISOString().split('T')[0]);
+      if (imagesBase64.length > 0) {
+        const multiResult = await parseTicketImagesWithAI(
+          imagesBase64,
+          text,
+          categories,
+          analysisDate
+        );
+
+        if (multiResult.isMultiItem && multiResult.items.length > 1) {
+          setMultiStore(multiResult.store || 'MercadoLibre');
+          setMultiDate(multiResult.date || analysisDate);
+          setMultiItems(multiResult.items);
+          setMultiTotalDetected(multiResult.totalDetected || null);
+          setMultiCartExpected(multiResult.cartTotalItemsExpected || null);
+          setShowMultiModal(true);
+          return;
+        }
+
+        // 1 solo item detectado en la foto
+        const first = multiResult.items[0];
+        if (first) {
+          setAmount(first.amount > 0 ? first.amount.toString() : '');
+          setStore(first.store || multiResult.store || '');
+          setDetail(first.detail || '');
+          setDate(multiResult.date || analysisDate);
+          setSelectedCatId(first.categoryId || null);
+          setSelectedSubId(first.subcategoryId || null);
+          setShowModal(true);
+          return;
+        }
       }
 
+      // Análisis de texto puro
+      const result = await parseExpenseWithAI(text, categories, analysisDate);
       if (result) {
         setAmount(result.amount > 0 ? result.amount.toString() : '');
         setStore(result.store || '');
@@ -173,7 +257,7 @@ export default function HomePage() {
       }
     } catch (err: any) {
       console.warn('Error en análisis principal, aplicando fallback heurístico:', err);
-      const fallback = parseLocalHeuristic(text, categories, new Date().toISOString().split('T')[0]);
+      const fallback = parseLocalHeuristic(text, categories, analysisDate);
       setAmount(fallback.amount > 0 ? fallback.amount.toString() : '');
       setStore(fallback.store || '');
       setDetail(fallback.detail || text || '');
@@ -184,6 +268,102 @@ export default function HomePage() {
       setShowModal(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleProrateDifference = () => {
+    if (!multiTotalDetected || multiItems.length === 0) return;
+    const currentSum = multiItems.reduce((acc, it) => acc + (it.amount || 0), 0);
+    if (currentSum <= 0) return;
+
+    const ratio = multiTotalDetected / currentSum;
+    let runningSum = 0;
+    const updated = multiItems.map((it, idx) => {
+      if (idx === multiItems.length - 1) {
+        const lastAmount = Math.round((multiTotalDetected - runningSum) * 100) / 100;
+        return { ...it, amount: lastAmount };
+      }
+      const newAmt = Math.round(it.amount * ratio * 100) / 100;
+      runningSum += newAmt;
+      return { ...it, amount: newAmt };
+    });
+
+    setMultiItems(updated);
+    showToast(`⚡ Precios prorrateados para sumar exactamente ${formatARS(multiTotalDetected)}`, 'success');
+  };
+
+  const handleAddAdjustmentItem = () => {
+    if (!multiTotalDetected) return;
+    const currentSum = multiItems.reduce((acc, it) => acc + (it.amount || 0), 0);
+    const diff = Math.round((multiTotalDetected - currentSum) * 100) / 100;
+    if (Math.abs(diff) < 0.01) {
+      showToast('ℹ️ Los artículos ya suman el total exacto', 'info');
+      return;
+    }
+
+    const adjItem: ParsedItem = {
+      detail: diff > 0 ? 'Envío / Recargo de compra' : 'Descuento cupón / Bonificación',
+      store: multiStore || 'MercadoLibre',
+      amount: diff,
+      categoryId: categories[0]?.id || 1,
+      subcategoryId: categories[0]?.subcategories[0]?.id || 1,
+      notes: 'Ajuste para conciliar total de compra',
+    };
+
+    setMultiItems(prev => [...prev, adjItem]);
+    showToast(`➕ Fila de ajuste agregada por ${formatARS(diff)}`, 'info');
+  };
+
+  const handleSaveMultiItems = async () => {
+    if (multiItems.length === 0) return;
+    setMultiSaving(true);
+
+    try {
+      for (const it of multiItems) {
+        const numAmount = parseFloat(it.amount as any) || 0;
+        if (numAmount <= 0) continue;
+
+        const catId = it.categoryId || 1;
+        const subId = it.subcategoryId || 1;
+        const catObj = categories.find(c => c.id === catId);
+        const subObj = catObj?.subcategories?.find((s: any) => s.id === subId);
+
+        const expData = {
+          date: multiDate,
+          amount: numAmount,
+          store: (it.store || multiStore).trim(),
+          detail: it.detail.trim(),
+          notes: it.notes || '',
+          category_id: catId,
+          subcategory_id: subId,
+          status: 'active' as const,
+          module_origin: 'ticket_vision' as const,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const newId = await db.expenses.add(expData);
+        syncToSheets('add', Number(newId), {
+          fecha: multiDate,
+          tipo: 'Gasto',
+          categoria: catObj?.name || 'Varios',
+          subcategoria: subObj?.name || 'General',
+          comercio: (it.store || multiStore).trim(),
+          detalle: it.detail.trim(),
+          monto: numAmount,
+          notas: it.notes || '',
+        });
+      }
+
+      showToast(`✅ ¡${multiItems.length} gastos guardados y sincronizados individualmente!`, 'success', 5000);
+      setShowMultiModal(false);
+      setImagesBase64([]);
+      setText('');
+      loadData();
+    } catch (err: any) {
+      showToast('❌ Error al guardar artículos: ' + err.message, 'error');
+    } finally {
+      setMultiSaving(false);
     }
   };
 
@@ -237,7 +417,7 @@ export default function HomePage() {
       category_id: catId,
       subcategory_id: subId,
       status: 'active' as const,
-      module_origin: imageBase64 ? 'ticket_vision' as const : 'general' as const,
+      module_origin: imagesBase64.length > 0 ? 'ticket_vision' as const : 'general' as const,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -279,7 +459,7 @@ export default function HomePage() {
       if (!keepOpenMode) {
         setShowModal(false);
         setText('');
-        setImageBase64(null);
+        setImagesBase64([]);
         setNotes('');
         setAmount('');
         setStore('');
@@ -290,7 +470,7 @@ export default function HomePage() {
         setAmount('');
         setStore('');
         setDetail('');
-        setImageBase64(null);
+        setImagesBase64([]);
         setNotes('');
         setSelectedCatId(null);
         setSelectedSubId(null);
@@ -405,27 +585,6 @@ export default function HomePage() {
     }
   };
 
-  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (evt) => {
-            setImageBase64(evt.target?.result as string);
-          };
-          reader.readAsDataURL(file);
-          break;
-        }
-      }
-    }
-  };
-
   const activeCat = categories.find(c => c.id === selectedCatId);
 
   return (
@@ -503,7 +662,7 @@ export default function HomePage() {
       <div className="chips-row" style={{ marginBottom: 14 }}>
         <button
           className={`chip${inputMode === 'ai' ? ' active' : ''}`}
-          onClick={() => { setInputMode('ai'); resetForm(); setText(''); setImageBase64(null); }}
+          onClick={() => { setInputMode('ai'); resetForm(); setText(''); setImagesBase64([]); }}
         >
           ✨ Cargar con IA / Foto / Texto
         </button>
@@ -518,59 +677,94 @@ export default function HomePage() {
       {/* MODO 1: Carga Asistida con IA / Foto / Texto */}
       {inputMode === 'ai' ? (
         <div className="card card-accent animate-in">
-          <label className="form-label">Cargar gasto (Texto, Foto o Pegar Imagen)</label>
+          <label className="form-label">Cargar gasto (Texto, Fotos o Pegar Imágenes)</label>
 
-          {/* Carga de Imagen / Foto de comprobante */}
+          {/* Carga de Múltiples Imágenes / Fotos de comprobantes o carrito */}
           <div style={{ marginBottom: 12 }}>
-            {imageBase64 ? (
-              <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
-                <img
-                  src={imageBase64}
-                  alt="Vista previa ticket"
-                  style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-accent)' }}
-                />
-                <button
-                  type="button"
-                  className="btn btn-danger btn-sm"
-                  onClick={() => setImageBase64(null)}
-                  style={{ position: 'absolute', top: 8, right: 8, padding: '4px 8px', fontSize: 12 }}
-                >
-                  ✕ Quitar foto
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
-                <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
-                  📷 Tomar Foto
-                  <input
-                    id="ticket-camera-input"
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleImageChange}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-                <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
-                  🖼️ Galería
-                  <input
-                    id="ticket-gallery-input"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageChange}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={handlePasteFromClipboardApi}
-                  style={{ borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}
-                >
-                  📋 Pegar Foto
-                </button>
+            {imagesBase64.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-light)' }}>
+                    📸 {imagesBase64.length} foto{imagesBase64.length > 1 ? 's' : ''} adjuntada{imagesBase64.length > 1 ? 's' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setImagesBase64([])}
+                    style={{ fontSize: 11, padding: '2px 8px', color: '#ef4444' }}
+                  >
+                    Borrar todas
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
+                  {imagesBase64.map((img, idx) => (
+                    <div key={idx} style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border-accent)', height: 90 }}>
+                      <img
+                        src={img}
+                        alt={`Foto ${idx + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeImage(idx)}
+                        style={{
+                          position: 'absolute',
+                          top: 4,
+                          right: 4,
+                          background: 'rgba(239, 68, 68, 0.85)',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '50%',
+                          width: 20,
+                          height: 20,
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 700
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+              <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
+                📷 {imagesBase64.length > 0 ? '+ Tomar' : '📷 Tomar Foto'}
+                <input
+                  id="ticket-camera-input"
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleImageChange}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
+                🖼️ {imagesBase64.length > 0 ? '+ Galería' : '🖼️ Galería'}
+                <input
+                  id="ticket-gallery-input"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageChange}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={handlePasteFromClipboardApi}
+                style={{ borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}
+              >
+                📋 Pegar Foto
+              </button>
+            </div>
           </div>
 
           {/* Input de Texto */}
@@ -580,7 +774,7 @@ export default function HomePage() {
           <textarea
             id="expense-text-input"
             className="form-textarea"
-            placeholder='Ej: "15000, Coto, Asado y verduras" o "60000, YPF, Nafta super" (o mantené presionado para PEGAR foto copiada)...'
+            placeholder='Ej: "15000, Coto, Asado y verduras" o "60000, YPF, Nafta super" (o pegá una o más fotos del carrito)...'
             value={text}
             onChange={e => setText(e.target.value)}
             onPaste={handleTextareaPaste}
@@ -608,9 +802,17 @@ export default function HomePage() {
             className="btn btn-primary"
             style={{ marginTop: 14 }}
             onClick={handleAnalyze}
-            disabled={loading || (!text.trim() && !imageBase64)}
+            disabled={loading || (!text.trim() && imagesBase64.length === 0)}
           >
-            {loading ? '🧠 Analizando con IA...' : imageBase64 && text ? '✨ Analizar Texto + Ticket' : imageBase64 ? '📸 Leer Ticket con IA' : '✨ Analizar Texto con IA'}
+            {loading
+              ? '🧠 Analizando con IA...'
+              : imagesBase64.length > 1
+              ? `✨ Analizar ${imagesBase64.length} Fotos con IA`
+              : imagesBase64.length === 1 && text
+              ? '✨ Analizar Texto + Foto'
+              : imagesBase64.length === 1
+              ? '📸 Leer Ticket con IA'
+              : '✨ Analizar Texto con IA'}
           </button>
         </div>
       ) : (
@@ -799,8 +1001,8 @@ export default function HomePage() {
         </>
       )}
 
-      {/* Modal de confirmación / Carga */}
-      <Modal isOpen={showModal} onClose={() => { setShowModal(false); resetForm(); setText(''); setImageBase64(null); }} title="💾 Confirmar o Cargar Gasto">
+      {/* Modal de confirmación / Carga Individual */}
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); resetForm(); setText(''); setImagesBase64([]); }} title="💾 Confirmar o Cargar Gasto">
         {saved ? (
           <div style={{ textAlign: 'center', padding: '24px 0' }}>
             <div style={{ fontSize: 48 }}>✅</div>
@@ -810,9 +1012,9 @@ export default function HomePage() {
           </div>
         ) : (
           <>
-            {imageBase64 && (
+            {imagesBase64.length > 0 && (
               <div style={{ marginBottom: 12 }}>
-                <img src={imageBase64} alt="Ticket" style={{ width: '100%', maxHeight: 120, objectFit: 'cover', borderRadius: 'var(--radius-sm)' }} />
+                <img src={imagesBase64[0]} alt="Ticket" style={{ width: '100%', maxHeight: 120, objectFit: 'cover', borderRadius: 'var(--radius-sm)' }} />
               </div>
             )}
 
@@ -918,9 +1120,270 @@ export default function HomePage() {
             >
               💾 Guardar Gasto
             </button>
-            <button type="button" className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => { setShowModal(false); resetForm(); setText(''); setImageBase64(null); }}>Cancelar</button>
+            <button type="button" className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => { setShowModal(false); resetForm(); setText(''); setImagesBase64([]); }}>Cancelar</button>
           </>
         )}
+      </Modal>
+
+      {/* Modal de Desglose de Compra Multi-Artículo */}
+      <Modal
+        isOpen={showMultiModal}
+        onClose={() => { setShowMultiModal(false); setImagesBase64([]); setText(''); }}
+        title={`🛒 Desglose de Compra (${multiItems.length} artículos)`}
+      >
+        <div style={{ maxHeight: '75vh', overflowY: 'auto', paddingRight: 4 }}>
+          {/* Header con Comercio y Fecha */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Comercio / Plataforma</label>
+              <input
+                className="form-input"
+                value={multiStore}
+                onChange={e => setMultiStore(e.target.value)}
+                placeholder="Ej: MercadoLibre, Coto..."
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Fecha de Compra</label>
+              <input
+                className="form-input"
+                type="date"
+                value={multiDate}
+                onChange={e => setMultiDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Alerta de cantidad esperada si aplica */}
+          {multiCartExpected && multiCartExpected !== multiItems.length && (
+            <div style={{
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              borderRadius: 8,
+              padding: '8px 12px',
+              fontSize: 12,
+              color: '#f59e0b',
+              marginBottom: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
+            }}>
+              <span>⚠️</span>
+              <span>
+                La captura indica <strong>Carrito ({multiCartExpected})</strong> pero se extrajeron <strong>{multiItems.length} artículos</strong>. Podés guardar estos o adjuntar más fotos.
+              </span>
+            </div>
+          )}
+
+          {/* Barra de Conciliación Matemática */}
+          {(() => {
+            const currentSum = multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0);
+            const targetTotal = multiTotalDetected || currentSum;
+            const diff = Math.round((targetTotal - currentSum) * 100) / 100;
+            const hasDiff = Math.abs(diff) >= 0.01;
+
+            return (
+              <div style={{
+                background: 'var(--bg-elevated)',
+                border: `1px solid ${hasDiff ? 'rgba(99, 102, 241, 0.4)' : 'rgba(34, 197, 94, 0.3)'}`,
+                borderRadius: 12,
+                padding: '12px 14px',
+                marginBottom: 14,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: hasDiff ? 8 : 0 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Suma de artículos</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>
+                      {formatARS(currentSum)}
+                    </div>
+                  </div>
+                  {multiTotalDetected && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total a Pagar</div>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--accent-light)' }}>
+                        {formatARS(multiTotalDetected)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {hasDiff && (
+                  <div style={{ paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <p style={{ fontSize: 11, color: '#a5b4fc', margin: '0 0 8px 0', fontWeight: 600 }}>
+                      Diferencia: {diff > 0 ? `+${formatARS(diff)}` : `-${formatARS(Math.abs(diff))}`} (cupones, envíos o descuentos)
+                    </p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ fontSize: 11, padding: '4px 10px' }}
+                        onClick={handleProrateDifference}
+                      >
+                        ⚡ Prorratear diferencia
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 11, padding: '4px 10px', background: 'rgba(255,255,255,0.05)' }}
+                        onClick={handleAddAdjustmentItem}
+                      >
+                        ➕ Fila de ajuste ({diff > 0 ? `+${formatARS(diff)}` : `-${formatARS(Math.abs(diff))}`})
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Lista de Artículos Desglosados */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
+            {multiItems.map((item, idx) => {
+              const itemCat = categories.find(c => c.id === item.categoryId);
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    padding: 12,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <input
+                        className="form-input"
+                        style={{ fontSize: 13, fontWeight: 700, padding: '6px 10px' }}
+                        value={item.detail}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setMultiItems(prev => prev.map((it, i) => i === idx ? { ...it, detail: val } : it));
+                        }}
+                        placeholder="Descripción del producto"
+                      />
+                    </div>
+                    <div style={{ width: 110 }}>
+                      <input
+                        className="form-input"
+                        style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent-light)', textAlign: 'right', padding: '6px 8px' }}
+                        type="text"
+                        inputMode="decimal"
+                        value={item.amount}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setMultiItems(prev => prev.map((it, i) => i === idx ? { ...it, amount: val as any } : it));
+                        }}
+                        placeholder="0"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMultiItems(prev => prev.filter((_, i) => i !== idx))}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#ef4444',
+                        cursor: 'pointer',
+                        fontSize: 16,
+                        padding: '4px 6px',
+                        lineHeight: 1
+                      }}
+                      title="Quitar artículo"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+
+                  {/* Selector rápido de categoría para este ítem */}
+                  <div>
+                    <div className="chips-row" style={{ gap: 4 }}>
+                      {categories.map(cat => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          className={`chip${item.categoryId === cat.id ? ' active' : ''}`}
+                          style={{ fontSize: 11, padding: '3px 8px' }}
+                          onClick={() => {
+                            setMultiItems(prev => prev.map((it, i) => i === idx ? {
+                              ...it,
+                              categoryId: cat.id,
+                              subcategoryId: cat.subcategories[0]?.id || 1
+                            } : it));
+                          }}
+                        >
+                          {cat.icon} {cat.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    {itemCat && itemCat.subcategories?.length > 0 && (
+                      <div className="chips-row" style={{ gap: 4, marginTop: 4, paddingLeft: 6 }}>
+                        {itemCat.subcategories.map((sub: any) => (
+                          <button
+                            key={sub.id}
+                            type="button"
+                            className={`chip${item.subcategoryId === sub.id ? ' active' : ''}`}
+                            style={{ fontSize: 10, padding: '2px 6px', background: item.subcategoryId === sub.id ? 'var(--accent-light)' : 'rgba(255,255,255,0.05)', color: item.subcategoryId === sub.id ? '#000' : 'var(--text-secondary)' }}
+                            onClick={() => {
+                              setMultiItems(prev => prev.map((it, i) => i === idx ? {
+                                ...it,
+                                subcategoryId: sub.id
+                              } : it));
+                            }}
+                          >
+                            {sub.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ width: '100%', marginBottom: 16, borderStyle: 'dashed' }}
+            onClick={() => {
+              const newItem: ParsedItem = {
+                detail: 'Nuevo producto',
+                amount: 0,
+                store: multiStore,
+                categoryId: categories[0]?.id || 1,
+                subcategoryId: categories[0]?.subcategories[0]?.id || 1,
+              };
+              setMultiItems(prev => [...prev, newItem]);
+            }}
+          >
+            ➕ Agregar otro producto manual
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-success"
+            style={{ width: '100%', padding: '14px', fontSize: 15, fontWeight: 700 }}
+            onClick={handleSaveMultiItems}
+            disabled={multiSaving || multiItems.length === 0}
+          >
+            {multiSaving
+              ? '⏳ Guardando...'
+              : `💾 Guardar los ${multiItems.length} Gastos Individuales (${formatARS(multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0))})`}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ width: '100%', marginTop: 8 }}
+            onClick={() => { setShowMultiModal(false); setImagesBase64([]); setText(''); }}
+          >
+            Cancelar
+          </button>
+        </div>
       </Modal>
 
       {/* Modal Bandeja de Atender Pendientes de Categoría */}
