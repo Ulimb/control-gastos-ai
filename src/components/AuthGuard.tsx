@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { APP_VERSION, APP_BUILD_DATE } from '@/lib/version';
 
 const DEFAULT_PIN = '1234';
 
@@ -91,9 +92,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           </p>
 
           <form onSubmit={handleLoginSubmit}>
-            {/* Indicador de dígitos */}
+            {/* Indicador de dígitos dinámico */}
             <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginBottom: 20 }}>
-              {[0, 1, 2, 3].map(idx => (
+              {Array.from({ length: savedPin.length || 4 }).map((_, idx) => (
                 <div
                   key={idx}
                   style={{
@@ -205,9 +206,22 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
               🔓 INGRESAR
             </button>
 
-            <p style={{ fontSize: 11, color: '#64748b', margin: 0 }}>
+            <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 10px 0' }}>
               PIN por defecto: <strong style={{ color: '#cbd5e1' }}>1234</strong> (cambiable en Configuración)
             </p>
+
+            <div style={{
+              display: 'inline-block',
+              padding: '3px 10px',
+              borderRadius: 20,
+              background: 'rgba(99, 102, 241, 0.12)',
+              border: '1px solid rgba(99, 102, 241, 0.25)',
+              fontSize: 11,
+              color: '#a5b4fc',
+              fontWeight: 600
+            }}>
+              🚀 {APP_VERSION} · {APP_BUILD_DATE}
+            </div>
           </form>
         </div>
       </div>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets } from '@/lib/db';
-import { parseExpenseWithAI, parseTicketImageWithAI, categorizePendingExpensesWithAI } from '@/lib/ai';
+import { parseExpenseWithAI, parseTicketImageWithAI, categorizePendingExpensesWithAI, parseNumericAmount } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
 
 export default function HomePage() {
@@ -74,7 +74,7 @@ export default function HomePage() {
     setCategories(cats);
 
     const recent = await db.expenses
-      .orderBy('id').reverse().limit(12).toArray();
+      .orderBy('id').reverse().limit(20).toArray();
     const catMap = Object.fromEntries(cats.map(c => [c.id, c]));
 
     setRecentExpenses(recent.map(e => ({
@@ -206,8 +206,15 @@ export default function HomePage() {
   };
 
   const handleSave = async () => {
-    const numAmount = parseFloat(amount);
-    if (!numAmount || (!detail.trim() && !store.trim())) return;
+    const numAmount = parseNumericAmount(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      showToast('⚠️ Ingresá un monto válido mayor a $0', 'error');
+      return;
+    }
+    if (!detail.trim() && !store.trim()) {
+      showToast('⚠️ Completá al menos el Detalle o el Comercio', 'error');
+      return;
+    }
 
     const catId = selectedCatId || 0;
     const subId = selectedSubId || 0;
@@ -613,7 +620,7 @@ export default function HomePage() {
               <input
                 id="direct-amount"
                 className="form-input"
-                type="number"
+                type="text"
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
                 placeholder="Ej: 15400"
@@ -714,7 +721,7 @@ export default function HomePage() {
             className="btn btn-success"
             style={{ marginTop: 8 }}
             onClick={handleSave}
-            disabled={(!detail.trim() && !store.trim()) || !amount || parseFloat(amount) <= 0}
+            disabled={(!detail.trim() && !store.trim()) || !amount.trim()}
           >
             💾 Guardar Gasto {selectedCatId === null ? '(Como Pendiente)' : ''}
           </button>
@@ -806,7 +813,7 @@ export default function HomePage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="form-group">
                 <label className="form-label">Monto ($) (*Requerido)</label>
-                <input id="modal-amount" className="form-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" inputMode="decimal" />
+                <input id="modal-amount" className="form-input" type="text" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" inputMode="decimal" />
               </div>
 
               <div className="form-group">
@@ -901,7 +908,7 @@ export default function HomePage() {
               id="save-expense-btn"
               className="btn btn-success"
               onClick={handleSave}
-              disabled={(!detail.trim() && !store.trim()) || !amount || parseFloat(amount) <= 0}
+              disabled={(!detail.trim() && !store.trim()) || !amount.trim()}
             >
               💾 Guardar Gasto
             </button>

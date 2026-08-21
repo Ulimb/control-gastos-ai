@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { db, seedDatabase, getSyncLogs, clearSyncLogs, syncFromSheets } from '@/lib/db';
 import type { SyncLogEntry, SheetsImportResult } from '@/lib/db';
 import { testGeminiKey } from '@/lib/ai';
+import { APP_VERSION, APP_BUILD_DATE } from '@/lib/version';
 
 export default function ConfiguracionPage() {
   const [apiKey, setApiKey] = useState('');
@@ -67,6 +68,9 @@ export default function ConfiguracionPage() {
   };
 
   const handleImportFromSheets = async () => {
+    if (!window.confirm('⚠️ Esto importará y sincronizará los últimos movimientos de tu Google Sheets con la memoria del dispositivo. ¿Deseas continuar?')) {
+      return;
+    }
     setImportingFromSheets(true);
     setImportResult(null);
     setImportProgress('');
@@ -142,8 +146,19 @@ export default function ConfiguracionPage() {
 
   return (
     <>
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 className="page-title">⚙️ Configuración</h1>
+        <div style={{
+          padding: '4px 10px',
+          borderRadius: 20,
+          background: 'rgba(99, 102, 241, 0.15)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          fontSize: 12,
+          color: 'var(--accent-light)',
+          fontWeight: 700
+        }}>
+          🚀 {APP_VERSION}
+        </div>
       </div>
 
       {/* 🔒 Seguridad y Acceso por PIN */}
@@ -417,6 +432,11 @@ export default function ConfiguracionPage() {
             ))}
           </div>
         )}
+      </div>
+
+      <div style={{ textAlign: 'center', margin: '24px 0 12px 0', color: 'var(--text-muted)', fontSize: 12 }}>
+        <p style={{ margin: '0 0 4px 0', fontWeight: 600 }}>Mis Finanzas PWA · {APP_VERSION}</p>
+        <p style={{ margin: 0, fontSize: 11 }}>Compilación: {APP_BUILD_DATE} · Desplegado en Vercel</p>
       </div>
     </>
   );

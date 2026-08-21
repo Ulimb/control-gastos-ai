@@ -44,7 +44,7 @@ export async function testGeminiKey(customKey?: string): Promise<{ ok: boolean; 
   return { ok: false, message: `Error de autenticación: ${lastError}` };
 }
 
-function parseNumericAmount(val: any): number {
+export function parseNumericAmount(val: any): number {
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
   if (!val) return 0;
   let str = String(val).trim().replace(/\$/g, '');

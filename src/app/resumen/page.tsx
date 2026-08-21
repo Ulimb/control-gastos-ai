@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, getPeriodBalance, getExpensesByCategory, formatARS, getCategoriesWithSubs, syncMovementToGoogleSheets, syncToSheets } from '@/lib/db';
 import type { Expense } from '@/lib/db';
+import { parseNumericAmount } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
 
 export default function ResumenPage() {
@@ -132,9 +133,8 @@ export default function ResumenPage() {
   };
 
   const handleSaveEdit = async () => {
-    if (!editAmount || parseFloat(editAmount) <= 0) return;
-
-    const numAmount = parseFloat(editAmount);
+    const numAmount = parseNumericAmount(editAmount);
+    if (isNaN(numAmount) || numAmount <= 0) return;
     const catId = editCatId || 1;
     const subId = editSubId || 1;
     const catObj = categories.find(c => c.id === catId);
@@ -501,7 +501,7 @@ export default function ResumenPage() {
 
         <div className="form-group">
           <label className="form-label">Monto ($)</label>
-          <input className="form-input" type="number" value={editAmount} onChange={e => setEditAmount(e.target.value)} inputMode="decimal" />
+          <input className="form-input" type="text" value={editAmount} onChange={e => setEditAmount(e.target.value)} placeholder="0" inputMode="decimal" />
         </div>
 
         <div className="form-group">
@@ -550,7 +550,7 @@ export default function ResumenPage() {
           </div>
         )}
 
-        <button className="btn btn-success" onClick={handleSaveEdit} disabled={!editAmount || parseFloat(editAmount) <= 0}>
+        <button className="btn btn-success" onClick={handleSaveEdit} disabled={!editAmount.trim()}>
           💾 {editingExpense ? 'Guardar Cambios' : 'Guardar Nuevo Gasto'}
         </button>
       </Modal>

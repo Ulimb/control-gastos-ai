@@ -183,8 +183,15 @@ export const db = new MisFinanzasDB();
 
 // ─── Carga automática de datos históricos ────────────────────────────────────
 export async function seedDatabase(force: boolean = false) {
+  if (typeof window !== 'undefined' && !force && localStorage.getItem('db_seeded') === 'true') {
+    return;
+  }
+
   const expenseCount = await db.expenses.count();
-  if (expenseCount > 0 && !force) return;
+  if (expenseCount > 0 && !force) {
+    if (typeof window !== 'undefined') localStorage.setItem('db_seeded', 'true');
+    return;
+  }
 
   await db.transaction(
     'rw',
@@ -232,6 +239,10 @@ export async function seedDatabase(force: boolean = false) {
       if (h.ai_rules?.length) await db.ai_rules.bulkAdd(h.ai_rules);
     }
   );
+
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('db_seeded', 'true');
+  }
 }
 
 // ─── Helpers de consulta ─────────────────────────────────────────────────────
