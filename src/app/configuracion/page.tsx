@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { db, seedDatabase, getSyncLogs, clearSyncLogs, syncFromSheets } from '@/lib/db';
+import { db, seedDatabase, getSyncLogs, clearSyncLogs, syncFromSheets, syncMissingExpensesToSheets } from '@/lib/db';
 import type { SyncLogEntry, SheetsImportResult } from '@/lib/db';
 import { testGeminiKey } from '@/lib/ai';
 import { APP_VERSION, APP_BUILD_DATE } from '@/lib/version';
@@ -20,6 +20,8 @@ export default function ConfiguracionPage() {
   const [importingFromSheets, setImportingFromSheets] = useState(false);
   const [importProgress, setImportProgress] = useState('');
   const [importResult, setImportResult] = useState<SheetsImportResult | null>(null);
+  const [syncingMissing, setSyncingMissing] = useState(false);
+  const [syncMissingResult, setSyncMissingResult] = useState<string | null>(null);
   const [testingKey, setTestingKey] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -78,6 +80,18 @@ export default function ConfiguracionPage() {
     setImportResult(result);
     setImportingFromSheets(false);
     await loadStats();
+  };
+
+  const handleSyncMissingToSheets = async () => {
+    setSyncingMissing(true);
+    setSyncMissingResult(null);
+    const res = await syncMissingExpensesToSheets((msg) => setSyncMissingResult(msg));
+    setSyncingMissing(false);
+    if (res.sent > 0) {
+      setSyncMissingResult(`✅ ¡${res.sent} gastos faltantes fueron enviados con éxito a tu Google Sheets!`);
+    } else {
+      setSyncMissingResult('✅ Todos los gastos locales ya están registrados en Google Sheets.');
+    }
   };
 
   const handleReloadHistory = async () => {
@@ -231,6 +245,28 @@ export default function ConfiguracionPage() {
               </p>
             )}
           </div>
+        )}
+
+        <hr style={{ borderColor: 'rgba(255,255,255,0.08)', margin: '18px 0' }} />
+
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>📤 Enviar gastos locales faltantes a Sheets</h2>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+          Compara todos los gastos guardados en tu dispositivo contra Google Sheets y envía cualquier gasto que no haya impactado previamente.
+        </p>
+
+        <button
+          className="btn btn-ghost"
+          onClick={handleSyncMissingToSheets}
+          disabled={syncingMissing}
+          style={{ background: 'rgba(99, 102, 241, 0.15)', borderColor: 'var(--accent)' }}
+        >
+          {syncingMissing ? '⏳ Verificando y enviando...' : '🔄 Sincronizar Faltantes con Sheets'}
+        </button>
+
+        {syncMissingResult && (
+          <p style={{ fontSize: 13, color: '#a5b4fc', marginTop: 10, fontWeight: 600 }}>
+            {syncMissingResult}
+          </p>
         )}
       </div>
 

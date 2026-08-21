@@ -371,7 +371,7 @@ export async function syncToSheets(
     monto?: number;
     notas?: string;
   }
-) {
+): Promise<{ ok: boolean; error?: string }> {
   const ts = new Date().toISOString();
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
   const url = customUrl || APPS_SCRIPT_URL;
@@ -380,7 +380,7 @@ export async function syncToSheets(
     const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_URL', error: 'Sin URL configurada' };
     addSyncLog(entry);
     console.error('[SYNC] ❌ Sin URL de Apps Script configurada', entry);
-    return;
+    return { ok: false, error: 'Sin URL configurada' };
   }
 
   const payload = {
@@ -394,25 +394,23 @@ export async function syncToSheets(
   console.log(`[SYNC] 📤 Enviando action=${action} expenseId=${expenseId}`, payload);
 
   try {
-    fetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
       mode: 'no-cors',
       cache: 'no-cache',
-    }).then(() => {
-      const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ENVIADO' };
-      addSyncLog(entry);
-      console.log(`[SYNC] ✅ Enviado OK action=${action} expenseId=${expenseId}`);
-    }).catch(err => {
-      const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_RED', error: String(err) };
-      addSyncLog(entry);
-      console.error(`[SYNC] ❌ Error de red action=${action}`, err);
     });
-  } catch (err) {
+
+    const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ENVIADO' };
+    addSyncLog(entry);
+    console.log(`[SYNC] ✅ Enviado OK action=${action} expenseId=${expenseId}`);
+    return { ok: true };
+  } catch (err: any) {
     const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_RED', error: String(err) };
     addSyncLog(entry);
-    console.error('[SYNC] ❌ Excepción inesperada', err);
+    console.error(`[SYNC] ❌ Error de red action=${action}`, err);
+    return { ok: false, error: String(err) };
   }
 }
 
@@ -429,7 +427,64 @@ export async function syncMovementToGoogleSheets(movement: {
   notas?: string;
   expenseId?: number;
 }) {
-  await syncToSheets('add', movement.expenseId || 0, movement);
+  return await syncToSheets('add', movement.expenseId || 0, movement);
+}
+
+// ─── Sincronizar Gastos Locales Faltantes en Sheets ────────────────────────────
+
+export async function syncMissingExpensesToSheets(
+  progressCallback?: (msg: string) => void
+): Promise<{ sent: number; total: number }> {
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
+  const url = customUrl || APPS_SCRIPT_URL;
+
+  if (!url) return { sent: 0, total: 0 };
+
+  progressCallback?.('📡 Consultando movimientos en Google Sheets...');
+  try {
+    const res = await fetch(`${url}?action=get_all_expenses`, { cache: 'no-cache' });
+    const json = await res.json();
+    const sheetIds = new Set((json.rows || []).map((r: any) => parseInt(r.id)).filter(Boolean));
+
+    const localExpenses = await db.expenses.where('status').equals('active').toArray();
+    const missing = localExpenses.filter(e => e.id && !sheetIds.has(e.id));
+
+    if (missing.length === 0) {
+      progressCallback?.('✅ Todos los gastos ya están sincronizados en Sheets.');
+      return { sent: 0, total: localExpenses.length };
+    }
+
+    const cats = await db.categories.toArray();
+    const subs = await db.subcategories.toArray();
+    const catMap = Object.fromEntries(cats.map(c => [c.id!, c]));
+    const subMap = Object.fromEntries(subs.map(s => [s.id!, s]));
+
+    let count = 0;
+    for (const exp of missing) {
+      count++;
+      const cat = exp.category_id ? catMap[exp.category_id] : null;
+      const sub = exp.subcategory_id ? subMap[exp.subcategory_id] : null;
+
+      progressCallback?.(`📤 Enviando faltante ${count} de ${missing.length}: ${exp.detail || exp.store}...`);
+      await syncToSheets('add', exp.id!, {
+        fecha: exp.date,
+        tipo: 'Gasto',
+        categoria: cat?.name || 'Varios',
+        subcategoria: sub?.name || 'General',
+        comercio: exp.store || '',
+        detalle: exp.detail || '',
+        monto: exp.amount,
+        notas: exp.notes || '',
+      });
+      await new Promise(r => setTimeout(r, 450));
+    }
+
+    progressCallback?.(`✅ Se sincronizaron ${missing.length} gastos faltantes a Google Sheets.`);
+    return { sent: missing.length, total: localExpenses.length };
+  } catch (err: any) {
+    progressCallback?.('❌ Error al sincronizar faltantes: ' + err.message);
+    return { sent: 0, total: 0 };
+  }
 }
 
 // ─── Importar desde Google Sheets → IndexedDB ────────────────────────────────

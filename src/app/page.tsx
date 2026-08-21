@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets } from '@/lib/db';
+import { useState, useEffect, useRef } from 'react';
+import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets, syncMissingExpensesToSheets } from '@/lib/db';
 import { parseExpenseWithAI, parseTicketImagesWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
 import type { ParsedItem } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
@@ -18,7 +18,10 @@ export default function HomePage() {
   const [keepOpenMode, setKeepOpenMode] = useState(false);
   const [categorizingBatch, setCategorizingBatch] = useState(false);
   const [syncingSheets, setSyncingSheets] = useState(false);
+  const [syncingMissing, setSyncingMissing] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'success', duration = 4000) => {
     setToast({ msg, type });
@@ -47,10 +50,15 @@ export default function HomePage() {
   const [multiTotalDetected, setMultiTotalDetected] = useState<number | null>(null);
   const [multiCartExpected, setMultiCartExpected] = useState<number | null>(null);
   const [multiSaving, setMultiSaving] = useState(false);
+  const [multiSavingProgress, setMultiSavingProgress] = useState<string | null>(null);
 
   const addImages = (newImages: string[]) => {
-    setImagesBase64(prev => [...prev, ...newImages]);
-    showToast(newImages.length === 1 ? '📸 Foto adjuntada' : `📸 ${newImages.length} fotos adjuntadas`, 'success', 2500);
+    setImagesBase64(prev => {
+      const unique = newImages.filter(img => !prev.includes(img));
+      if (unique.length === 0) return prev;
+      showToast(unique.length === 1 ? '📸 Foto adjuntada' : `📸 ${unique.length} fotos adjuntadas`, 'success', 2500);
+      return [...prev, ...unique];
+    });
   };
 
   const removeImage = (index: number) => {
@@ -65,6 +73,10 @@ export default function HomePage() {
     init();
 
     const handleGlobalPaste = (e: ClipboardEvent) => {
+      // Si el usuario está dentro del cuadro de texto, lo maneja el onPaste específico para no duplicar
+      const targetTag = (e.target as HTMLElement)?.tagName;
+      if (targetTag === 'TEXTAREA' || targetTag === 'INPUT') return;
+
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -138,13 +150,15 @@ export default function HomePage() {
     e.target.value = '';
   };
 
-  const handleTextareaPaste = (e: React.ClipboardEvent) => {
+  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        e.stopPropagation();
         const file = item.getAsFile();
         if (file) {
           const reader = new FileReader();
@@ -154,7 +168,6 @@ export default function HomePage() {
             }
           };
           reader.readAsDataURL(file);
-          e.preventDefault();
           break;
         }
       }
@@ -163,31 +176,52 @@ export default function HomePage() {
 
   const handlePasteFromClipboardApi = async () => {
     try {
-      if (!navigator.clipboard || !navigator.clipboard.read) {
-        showToast('📋 Mantené presionado el cuadro de texto para PEGAR la foto.', 'info', 4000);
-        return;
-      }
-      const items = await navigator.clipboard.read();
-      let found = false;
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const reader = new FileReader();
-          reader.onload = (evt) => {
-            if (evt.target?.result) {
-              addImages([evt.target.result as string]);
-            }
-          };
-          reader.readAsDataURL(blob);
-          found = true;
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        let found = false;
+        for (const item of items) {
+          const imageType = item.types.find(t => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+              if (evt.target?.result) {
+                addImages([evt.target.result as string]);
+              }
+            };
+            reader.readAsDataURL(blob);
+            found = true;
+          }
         }
+        if (found) return;
       }
-      if (!found) {
-        showToast('ℹ️ No hay ninguna foto en el portapapeles', 'info');
-      }
-    } catch {
+    } catch (_) {
+      // Ignorar excepción de permisos estrictos en navegadores móviles
+    }
+
+    // Si la API del portapapeles está bloqueada por el sistema móvil, asistimos al usuario con foco inmediato
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      showToast('👉 Mantené presionado el cuadro de texto y tocá "Pegar"', 'info', 4000);
+    } else {
       showToast('📋 Mantené presionado el cuadro de texto para PEGAR la foto', 'info', 4000);
+    }
+  };
+
+  const handleSyncMissing = async () => {
+    setSyncingMissing(true);
+    showToast('🔄 Verificando integridad de gastos con Google Sheets...', 'info', 3000);
+    try {
+      const res = await syncMissingExpensesToSheets((msg) => showToast(msg, 'info', 3000));
+      if (res.sent > 0) {
+        showToast(`✅ Se sincronizaron ${res.sent} gastos faltantes a Google Sheets`, 'success', 5000);
+      } else {
+        showToast('✅ Todos los gastos están 100% sincronizados con Sheets', 'success', 4000);
+      }
+    } catch (err: any) {
+      showToast('❌ Error al sincronizar: ' + err.message, 'error');
+    } finally {
+      setSyncingMissing(false);
     }
   };
 
@@ -319,9 +353,13 @@ export default function HomePage() {
     setMultiSaving(true);
 
     try {
+      let count = 0;
       for (const it of multiItems) {
+        count++;
         const numAmount = parseFloat(it.amount as any) || 0;
         if (numAmount <= 0) continue;
+
+        setMultiSavingProgress(`Guardando ${count} de ${multiItems.length}...`);
 
         const catId = it.categoryId || 1;
         const subId = it.subcategoryId || 1;
@@ -343,7 +381,7 @@ export default function HomePage() {
         };
 
         const newId = await db.expenses.add(expData);
-        syncToSheets('add', Number(newId), {
+        await syncToSheets('add', Number(newId), {
           fecha: multiDate,
           tipo: 'Gasto',
           categoria: catObj?.name || 'Varios',
@@ -353,9 +391,12 @@ export default function HomePage() {
           monto: numAmount,
           notas: it.notes || '',
         });
+
+        // Pausa secuencial para garantizar escritura ordenada en Google Sheets
+        await new Promise(r => setTimeout(r, 450));
       }
 
-      showToast(`✅ ¡${multiItems.length} gastos guardados y sincronizados individualmente!`, 'success', 5000);
+      showToast(`✅ ¡${multiItems.length} gastos guardados y sincronizados individualmente en Sheets!`, 'success', 5000);
       setShowMultiModal(false);
       setImagesBase64([]);
       setText('');
@@ -364,6 +405,7 @@ export default function HomePage() {
       showToast('❌ Error al guardar artículos: ' + err.message, 'error');
     } finally {
       setMultiSaving(false);
+      setMultiSavingProgress(null);
     }
   };
 
@@ -772,6 +814,7 @@ export default function HomePage() {
             💡 Formato sugerido para IA: <span style={{ color: 'var(--text-primary)' }}>Monto, Comercio, Detalle</span>
           </p>
           <textarea
+            ref={textareaRef}
             id="expense-text-input"
             className="form-textarea"
             placeholder='Ej: "15000, Coto, Asado y verduras" o "60000, YPF, Nafta super" (o pegá una o más fotos del carrito)...'
@@ -1372,7 +1415,7 @@ export default function HomePage() {
             disabled={multiSaving || multiItems.length === 0}
           >
             {multiSaving
-              ? '⏳ Guardando...'
+              ? (multiSavingProgress || '⏳ Guardando...')
               : `💾 Guardar los ${multiItems.length} Gastos Individuales (${formatARS(multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0))})`}
           </button>
           <button
