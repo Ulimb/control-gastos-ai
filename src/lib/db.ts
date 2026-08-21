@@ -446,7 +446,12 @@ export async function syncMissingExpensesToSheets(
     const json = await res.json();
     const sheetIds = new Set((json.rows || []).map((r: any) => parseInt(r.id)).filter(Boolean));
 
-    const localExpenses = await db.expenses.where('status').equals('active').toArray();
+    // Solo sincronizar gastos creados por la app (ID > 267). Los gastos históricos (1..267) pertenecen a las hojas consolidadas.
+    const localExpenses = await db.expenses
+      .where('id')
+      .above(267)
+      .and(e => e.status === 'active')
+      .toArray();
     const missing = localExpenses.filter(e => e.id && !sheetIds.has(e.id));
 
     if (missing.length === 0) {
