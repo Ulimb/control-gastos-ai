@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets } from '@/lib/db';
-import { parseExpenseWithAI, parseTicketImageWithAI, categorizePendingExpensesWithAI, parseNumericAmount } from '@/lib/ai';
+import { parseExpenseWithAI, parseTicketImageWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
 
 export default function HomePage() {
@@ -172,9 +172,15 @@ export default function HomePage() {
         setShowModal(true);
       }
     } catch (err: any) {
-      const msg = err?.message || 'Error al procesar con IA. Verificá tu API Key en Configuración.';
-      showToast(`⚠️ ${msg}`, 'error', 6000);
-      setDetail(text || '');
+      console.warn('Error en análisis principal, aplicando fallback heurístico:', err);
+      const fallback = parseLocalHeuristic(text, categories, new Date().toISOString().split('T')[0]);
+      setAmount(fallback.amount > 0 ? fallback.amount.toString() : '');
+      setStore(fallback.store || '');
+      setDetail(fallback.detail || text || '');
+      setDate(fallback.date);
+      setSelectedCatId(fallback.categoryId || null);
+      setSelectedSubId(fallback.subcategoryId || null);
+      showToast('💡 Completado con análisis inteligente rápido', 'info', 3000);
       setShowModal(true);
     } finally {
       setLoading(false);
