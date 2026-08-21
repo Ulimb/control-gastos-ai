@@ -136,16 +136,30 @@ export default function HomePage() {
     }
   };
 
+  const resetForm = () => {
+    setAmount('');
+    setStore('');
+    setDetail('');
+    setNotes('');
+    setSelectedCatId(null);
+    setSelectedSubId(null);
+    setEditingExpenseId(null);
+    setDate(new Date().toISOString().split('T')[0]);
+  };
+
   const handleAnalyze = async () => {
     if (!text.trim() && !imageBase64) return;
     setLoading(true);
 
+    // Limpiar datos anteriores antes de analizar
+    resetForm();
+
     try {
       let result = null;
       if (imageBase64) {
-        result = await parseTicketImageWithAI(imageBase64, text, categories, date);
+        result = await parseTicketImageWithAI(imageBase64, text, categories, new Date().toISOString().split('T')[0]);
       } else {
-        result = await parseExpenseWithAI(text, categories, date);
+        result = await parseExpenseWithAI(text, categories, new Date().toISOString().split('T')[0]);
       }
 
       if (result) {
@@ -160,11 +174,7 @@ export default function HomePage() {
     } catch (err: any) {
       const msg = err?.message || 'Error al procesar con IA. Verificá tu API Key en Configuración.';
       showToast(`⚠️ ${msg}`, 'error', 6000);
-      setAmount('');
-      setStore('');
       setDetail(text || '');
-      setSelectedCatId(null);
-      setSelectedSubId(null);
       setShowModal(true);
     } finally {
       setLoading(false);
@@ -480,13 +490,13 @@ export default function HomePage() {
       <div className="chips-row" style={{ marginBottom: 14 }}>
         <button
           className={`chip${inputMode === 'ai' ? ' active' : ''}`}
-          onClick={() => setInputMode('ai')}
+          onClick={() => { setInputMode('ai'); resetForm(); setText(''); setImageBase64(null); }}
         >
           ✨ Cargar con IA / Foto / Texto
         </button>
         <button
           className={`chip${inputMode === 'form' ? ' active' : ''}`}
-          onClick={() => setInputMode('form')}
+          onClick={() => { setInputMode('form'); resetForm(); }}
         >
           📝 Formulario Rápido (Comercio + Detalle + Monto)
         </button>
@@ -777,7 +787,7 @@ export default function HomePage() {
       )}
 
       {/* Modal de confirmación / Carga */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="💾 Confirmar o Cargar Gasto">
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); resetForm(); setText(''); setImageBase64(null); }} title="💾 Confirmar o Cargar Gasto">
         {saved ? (
           <div style={{ textAlign: 'center', padding: '24px 0' }}>
             <div style={{ fontSize: 48 }}>✅</div>
@@ -895,7 +905,7 @@ export default function HomePage() {
             >
               💾 Guardar Gasto
             </button>
-            <button type="button" className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => setShowModal(false)}>Cancelar</button>
+            <button type="button" className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => { setShowModal(false); resetForm(); setText(''); setImageBase64(null); }}>Cancelar</button>
           </>
         )}
       </Modal>
