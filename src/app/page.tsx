@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets, syncMissingExpensesToSheets, settleExpenseReimbursement } from '@/lib/db';
-import { parseExpenseWithAI, parseTicketImagesWithAI, parseMultiExpenseTextWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
+import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets, syncMissingExpensesToSheets, settleExpenseReimbursement, syncFromSheets } from '@/lib/db';
+import { parseExpenseWithAI, parseTicketImagesWithAI, parseMultiExpenseTextWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic, parseDiscount } from '@/lib/ai';
 import type { ParsedItem } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
 
@@ -59,6 +59,8 @@ export default function HomePage() {
   const [multiCartExpected, setMultiCartExpected] = useState<number | null>(null);
   const [multiSaving, setMultiSaving] = useState(false);
   const [multiSavingProgress, setMultiSavingProgress] = useState<string | null>(null);
+  const [multiDiscount, setMultiDiscount] = useState<number | null>(null);
+  const [multiDiscountDesc, setMultiDiscountDesc] = useState<string>('');
 
   const addImages = (newImages: string[]) => {
     setImagesBase64(prev => {
@@ -100,6 +102,15 @@ export default function HomePage() {
             setDraftRestored(true);
           }
         }
+      } catch (_) {}
+
+      // Sincronizar en segundo plano desde Google Sheets para mantener actualizados Safari, Chrome y dispositivos
+      try {
+        syncFromSheets().then(res => {
+          if (res.imported > 0 || res.updated > 0) {
+            loadData();
+          }
+        }).catch(() => {});
       } catch (_) {}
     };
     init();
@@ -337,6 +348,13 @@ export default function HomePage() {
           setMultiItems(multiResult.items);
           setMultiTotalDetected(multiResult.totalDetected || null);
           setMultiCartExpected(multiResult.cartTotalItemsExpected || null);
+          if (multiResult.discountApplied && multiResult.discountApplied > 0) {
+            setMultiDiscount(multiResult.discountApplied);
+            setMultiDiscountDesc(multiResult.discountDescription || 'Promoción aplicada');
+          } else {
+            setMultiDiscount(null);
+            setMultiDiscountDesc('');
+          }
           setShowMultiModal(true);
           return;
         }
@@ -367,6 +385,14 @@ export default function HomePage() {
           setMultiItems(multiTextResult.items);
           setMultiTotalDetected(multiTextResult.totalDetected || null);
           setMultiCartExpected(multiTextResult.items.length);
+          const promo = parseDiscount(text, multiTextResult.totalDetected || multiTextResult.items.reduce((s, it) => s + it.amount, 0));
+          if (promo.discountAmount > 0) {
+            setMultiDiscount(promo.discountAmount);
+            setMultiDiscountDesc(promo.discountDesc);
+          } else {
+            setMultiDiscount(null);
+            setMultiDiscountDesc('');
+          }
           setShowMultiModal(true);
           return;
         }
@@ -428,6 +454,55 @@ export default function HomePage() {
 
     setMultiItems(updated);
     showToast(`⚡ Precios prorrateados para sumar exactamente ${formatARS(multiTotalDetected)}`, 'success');
+  };
+
+  const handleProrateDiscount = (discountAmt: number, desc: string) => {
+    if (!discountAmt || multiItems.length === 0) return;
+    const currentSum = multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0);
+    if (currentSum <= 0) return;
+
+    const targetTotal = currentSum - discountAmt;
+    const ratio = targetTotal / currentSum;
+    let runningSum = 0;
+
+    const updated = multiItems.map((it, idx) => {
+      const oldAmt = parseFloat(it.amount as any) || 0;
+      if (idx === multiItems.length - 1) {
+        const lastAmount = Math.round((targetTotal - runningSum) * 100) / 100;
+        return {
+          ...it,
+          amount: lastAmount,
+          notes: (it.notes ? it.notes + ' · ' : '') + `[${desc || 'Promo'} aplicada. Lista original: $${oldAmt}]`
+        };
+      }
+      const newAmt = Math.round(oldAmt * ratio * 100) / 100;
+      runningSum += newAmt;
+      return {
+        ...it,
+        amount: newAmt,
+        notes: (it.notes ? it.notes + ' · ' : '') + `[${desc || 'Promo'} aplicada. Lista original: $${oldAmt}]`
+      };
+    });
+
+    setMultiItems(updated);
+    setMultiTotalDetected(targetTotal);
+    setMultiDiscount(null);
+    showToast(`⚡ Descuento de ${formatARS(discountAmt)} prorrateado en los productos`, 'success', 4000);
+  };
+
+  const handleAddDiscountItem = (discountAmt: number, desc: string) => {
+    if (!discountAmt) return;
+    const adjItem: ParsedItem = {
+      detail: desc || 'Descuento / Promoción',
+      store: multiStore || 'MercadoLibre',
+      amount: -Math.abs(discountAmt),
+      categoryId: multiItems[0]?.categoryId || 1,
+      subcategoryId: multiItems[0]?.subcategoryId || 1,
+      notes: 'Bonificación / Promoción global',
+    };
+    setMultiItems(prev => [...prev, adjItem]);
+    setMultiDiscount(null);
+    showToast(`➕ Fila de descuento de -${formatARS(discountAmt)} agregada a la compra`, 'info', 3500);
   };
 
   const handleAddAdjustmentItem = () => {
@@ -781,11 +856,29 @@ export default function HomePage() {
 
   return (
     <>
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 className="page-title">⚡ Mis Finanzas</h1>
           <p className="page-subtitle">{new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 12, padding: '6px 12px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}
+          onClick={async () => {
+            showToast('📡 Sincronizando con Google Sheets...', 'info', 2500);
+            const res = await syncFromSheets((msg) => showToast(msg, 'info', 2500));
+            if (res.imported > 0 || res.updated > 0) {
+              showToast(`✅ Sincronizados: ${res.imported} nuevos, ${res.updated} actualizados`, 'success', 4500);
+              loadData();
+            } else {
+              showToast('✅ Tu app ya está 100% al día con Google Sheets', 'success', 3000);
+            }
+          }}
+          title="Descargar y sincronizar con Google Sheets"
+        >
+          🔄 Sincronizar
+        </button>
       </div>
 
       {/* Banner de Pendientes de Clasificar */}
@@ -1610,6 +1703,82 @@ export default function HomePage() {
               <span>
                 La captura indica <strong>Carrito ({multiCartExpected})</strong> pero se extrajeron <strong>{multiItems.length} artículos</strong>. Podés guardar estos o adjuntar más fotos.
               </span>
+            </div>
+          )}
+
+          {/* Banner de Promoción / Descuento detectado o manual */}
+          {multiDiscount && multiDiscount > 0 ? (
+            <div style={{
+              background: 'rgba(99, 102, 241, 0.12)',
+              border: '1px solid var(--accent)',
+              borderRadius: 12,
+              padding: '12px 14px',
+              marginBottom: 14,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-light)' }}>
+                  🎁 {multiDiscountDesc || 'Promoción / Descuento'}
+                </span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--positive)' }}>
+                  -{formatARS(multiDiscount)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Total Neto Real a Pagar:</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>
+                  {formatARS(Math.max(0, (multiTotalDetected || multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0)) - multiDiscount))}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ fontSize: 11, padding: '5px 12px' }}
+                  onClick={() => handleProrateDiscount(multiDiscount, multiDiscountDesc)}
+                >
+                  ⚡ Prorratear descuento en los productos
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: '5px 12px', background: 'rgba(255,255,255,0.06)' }}
+                  onClick={() => handleAddDiscountItem(multiDiscount, multiDiscountDesc)}
+                >
+                  ➕ Agregar como fila (-{formatARS(multiDiscount)})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: '5px 8px', color: '#ef4444' }}
+                  onClick={() => { setMultiDiscount(null); setMultiDiscountDesc(''); }}
+                >
+                  ✕ Quitar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 10, textAlign: 'right' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: 11, padding: '3px 8px', color: 'var(--accent-light)' }}
+                onClick={() => {
+                  const input = window.prompt('Ingresá el descuento o promo (ej: "20% tope 24000" o "24000"):');
+                  if (input) {
+                    const currentSum = multiItems.reduce((acc, it) => acc + (parseFloat(it.amount as any) || 0), 0);
+                    const calc = parseDiscount(input, multiTotalDetected || currentSum);
+                    if (calc.discountAmount > 0) {
+                      setMultiDiscount(calc.discountAmount);
+                      setMultiDiscountDesc(calc.discountDesc || input);
+                      showToast(`🎁 Descuento de ${formatARS(calc.discountAmount)} detectado`, 'success', 3000);
+                    } else {
+                      showToast('⚠️ No se reconoció el monto o porcentaje de descuento', 'info');
+                    }
+                  }
+                }}
+              >
+                🎁 + Aplicar Descuento / Promo (Tope)
+              </button>
             </div>
           )}
 

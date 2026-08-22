@@ -363,7 +363,84 @@ export interface MultiItemParseResult {
   cartTotalItemsExpected?: number;
   discounts?: number;
   shipping?: number;
+  discountApplied?: number;
+  discountDescription?: string;
+  netTotal?: number;
   raw?: string;
+}
+
+// ─── Detector y Calculador de Promociones / Descuentos Bancarios ─────────────
+
+export function parseDiscount(text: string, totalGross: number): {
+  discountAmount: number;
+  discountDesc: string;
+  netTotal: number;
+  percentage?: number;
+  cap?: number;
+} {
+  let discountAmount = 0;
+  let discountDesc = '';
+  let percentage: number | undefined;
+  let cap: number | undefined;
+
+  if (!text || !text.trim() || totalGross <= 0) {
+    return { discountAmount: 0, discountDesc: '', netTotal: totalGross };
+  }
+
+  const percentTopeMatch = text.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:con\s+)?(?:tope\s*(?:de\s*)?)?(\$?\s*\d+(?:[.,]\d+)?(?:\s*(?:lucas|k))?)?/i);
+  const directDescMatch = text.match(/(?:descuento|promo|reintegro|ahorro|desc)\s*(?:de\s*)?(\$?\s*\d+(?:[.,]\d+)?(?:\s*(?:lucas|k))?)/i);
+
+  if (percentTopeMatch) {
+    percentage = parseFloat(percentTopeMatch[1].replace(',', '.'));
+    if (percentTopeMatch[2]) {
+      const capRaw = percentTopeMatch[2].trim();
+      const lucas = capRaw.match(/(\d+(?:[.,]\d+)?)\s*(?:lucas|k)/i);
+      if (lucas) {
+        cap = parseFloat(lucas[1].replace(',', '.')) * 1000;
+      } else {
+        cap = parseNumericAmount(capRaw);
+      }
+    }
+
+    const calculated = (totalGross * percentage) / 100;
+    if (cap && cap > 0) {
+      discountAmount = Math.min(calculated, cap);
+      discountDesc = `Promo ${percentage}% (tope $${cap})`;
+    } else {
+      discountAmount = calculated;
+      discountDesc = `Descuento ${percentage}%`;
+    }
+  } else if (directDescMatch) {
+    const directRaw = directDescMatch[1].trim();
+    const lucas = directRaw.match(/(\d+(?:[.,]\d+)?)\s*(?:lucas|k)/i);
+    if (lucas) {
+      discountAmount = parseFloat(lucas[1].replace(',', '.')) * 1000;
+    } else {
+      discountAmount = parseNumericAmount(directRaw);
+    }
+    discountDesc = `Descuento $${discountAmount}`;
+  }
+
+  // Detectar billetera o banco común
+  const wallets = [
+    'mercado pago', 'mercadopago', 'mp', 'cuenta dni', 'cuentadni', 'modo', 'bna',
+    'santander', 'galicia', 'bbva', 'nacion', 'macro', 'personal pay', 'brubank', 'uala', 'ualá', 'lemon'
+  ];
+  for (const w of wallets) {
+    if (new RegExp(`\\b${w}\\b`, 'i').test(text)) {
+      const name = w.toUpperCase();
+      discountDesc += ` [${name}]`;
+      break;
+    }
+  }
+
+  return {
+    discountAmount: Math.round(discountAmount * 100) / 100,
+    discountDesc: discountDesc.trim(),
+    netTotal: Math.round((totalGross - discountAmount) * 100) / 100,
+    percentage,
+    cap,
+  };
 }
 
 // ─── Carga de Múltiples Gastos en un Solo Mensaje (Multi-línea) ───────────────
@@ -619,15 +696,21 @@ Devolvé ÚNICAMENTE un JSON válido con esta estructura:
             },
           ];
 
+      const rawTotal = parseNumericAmount(parsed.total_amount || parsed.amount) || itemsList.reduce((s, it) => s + it.amount, 0);
+      const promoCalc = parseDiscount(textPrompt, rawTotal);
+
       return {
         isMultiItem: parsed.is_multi_item === true || itemsList.length > 1,
         store: parsed.store || '',
         date: parsed.date || today,
         items: itemsList,
-        totalDetected: parseNumericAmount(parsed.total_amount || parsed.amount),
+        totalDetected: rawTotal,
         cartTotalItemsExpected: parsed.cart_total_items_expected ? parseInt(parsed.cart_total_items_expected) : undefined,
-        discounts: parseNumericAmount(parsed.discounts),
+        discounts: parseNumericAmount(parsed.discounts) || (promoCalc.discountAmount > 0 ? promoCalc.discountAmount : undefined),
         shipping: parseNumericAmount(parsed.shipping),
+        discountApplied: promoCalc.discountAmount > 0 ? promoCalc.discountAmount : undefined,
+        discountDescription: promoCalc.discountDesc || undefined,
+        netTotal: promoCalc.discountAmount > 0 ? promoCalc.netTotal : rawTotal,
         raw,
       };
     } catch (err) {

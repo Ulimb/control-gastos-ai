@@ -610,6 +610,27 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
         const category_id = catByName[catName] || 0;
         const subcategory_id = subByName[subName] || 0;
 
+        // Detectar reintegro si está en las notas
+        let reimbPerson: string | undefined = undefined;
+        let reimbAmount: number | undefined = undefined;
+        let reimbStatus: 'pending' | 'settled' | undefined = undefined;
+
+        if (row.notas && /Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i.test(row.notas)) {
+          const match = row.notas.match(/Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i);
+          if (match) {
+            reimbPerson = match[1];
+            reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
+            reimbStatus = 'pending';
+          }
+        } else if (row.notas && /Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i.test(row.notas)) {
+          const match = row.notas.match(/Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i);
+          if (match) {
+            reimbPerson = match[1];
+            reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
+            reimbStatus = 'settled';
+          }
+        }
+
         const expenseData: Expense = {
           id: sheetId,
           date: row.fecha || new Date().toISOString().split('T')[0],
@@ -621,6 +642,9 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
           subcategory_id,
           status: 'active',
           module_origin: 'sheets_import',
+          reimbursement_person: reimbPerson,
+          reimbursement_amount: reimbAmount,
+          reimbursement_status: reimbStatus,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -628,8 +652,14 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
         // Verificar si ya existe en IndexedDB
         const existing = await db.expenses.get(sheetId);
         if (existing) {
-          // Actualizar solo si el monto o detalle cambió
-          if (existing.amount !== amount || existing.detail !== expenseData.detail || existing.store !== expenseData.store) {
+          // Actualizar si el monto, detalle, categoria o estado de reintegro cambió
+          if (
+            existing.amount !== amount ||
+            existing.detail !== expenseData.detail ||
+            existing.store !== expenseData.store ||
+            existing.category_id !== category_id ||
+            existing.reimbursement_status !== reimbStatus
+          ) {
             await db.expenses.put(expenseData);
             result.updated++;
           } else {
