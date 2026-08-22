@@ -5,10 +5,12 @@ export interface AIParseResult {
   detail: string;
   store?: string;
   date: string;
-  categoryId: number;
-  subcategoryId: number;
+  categoryId: number | null;
+  subcategoryId: number | null;
   confidence: number;
   raw?: string;
+  reimbursementPerson?: string;
+  reimbursementAmount?: number;
 }
 
 const BUILTIN_KEY = ['AQ', 'Ab8RN6J8SVaBP1CCPsSkorrpS-Z-HoFZ6Wf29Y46uOIUiDkAUQ'].join('.');
@@ -92,10 +94,43 @@ export function parseLocalHeuristic(
       store: '',
       detail: 'Gasto no identificado',
       date: calculatedDate,
-      categoryId: null as any,
-      subcategoryId: null as any,
+      categoryId: null,
+      subcategoryId: null,
       confidence: 0.95,
     };
+  }
+
+  // Detección de gasto compartido / persona que debe devolver
+  let reimbursementPerson: string | undefined;
+  let reimbursementAmount: number | undefined;
+
+  const meDebeMatch = cleanText.match(/\b(?:me debe|me devuelve|debe|devuelve|reintegra|reintegro de)\s*(?:a\s+)?([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)?\s*(\$?\s*\d+(?:[.,]\d+)?(?:\s*(?:lucas|k))?|la mitad|50%)?/i);
+  const mitadMatch = /\b(la mitad|50%|miti|dividido 2|mitad)\b/i.test(cleanText);
+
+  const knownPersons = ['sabri', 'sabrina', 'juan', 'pedro', 'lucas', 'mama', 'mamá', 'papa', 'papá', 'hermano', 'hermana', 'amigo', 'amiga', 'nico', 'facu', 'franco', 'matias', 'mati'];
+  for (const p of knownPersons) {
+    if (new RegExp(`\\b${p}\\b`, 'i').test(cleanText)) {
+      reimbursementPerson = p.charAt(0).toUpperCase() + p.slice(1);
+      break;
+    }
+  }
+  if (!reimbursementPerson && meDebeMatch && meDebeMatch[1]) {
+    reimbursementPerson = meDebeMatch[1].charAt(0).toUpperCase() + meDebeMatch[1].slice(1);
+  }
+
+  if (reimbursementPerson || meDebeMatch || mitadMatch) {
+    if (mitadMatch && amount > 0) {
+      reimbursementAmount = Math.round((amount / 2) * 100) / 100;
+    } else if (meDebeMatch && meDebeMatch[2]) {
+      const rawReimb = meDebeMatch[2];
+      if (/mitad|50%/i.test(rawReimb)) {
+        reimbursementAmount = Math.round((amount / 2) * 100) / 100;
+      } else {
+        reimbursementAmount = parseNumericAmount(rawReimb);
+      }
+    } else if (amount > 0 && reimbursementPerson) {
+      reimbursementAmount = Math.round((amount / 2) * 100) / 100;
+    }
   }
 
   cleanText = cleanText.replace(/^[,;.\s]+|[,;.\s]+$/g, '');
@@ -156,6 +191,8 @@ export function parseLocalHeuristic(
     categoryId,
     subcategoryId,
     confidence,
+    reimbursementPerson,
+    reimbursementAmount,
   };
 }
 
@@ -226,10 +263,10 @@ export async function parseExpenseWithAI(
 
   const prompt = `Sos un asistente experto de finanzas personales argentino. Analizá el texto libre ingresado por el usuario y auto-identificá inteligentemente cada componente.
 
-El usuario puede escribir en cualquier formato libre (ej: "42000, farmacia", "77 lucas nafta ypf ayer", "coto 15000 carne y verduras", "60000 ypf nafta super", "20000 no identificado", "5000 no me acuerdo").
+El usuario puede escribir en cualquier formato libre (ej: "42000, farmacia", "77 lucas nafta ypf ayer", "coto 15000 carne y verduras", "60000 ypf nafta super", "20000 no identificado", "5000 no me acuerdo", "40000 hamburguesas sabri me debe 20000").
 
 Instrucciones:
-1. "amount": Extraé el monto total como NÚMERO flotante puro sin puntos de miles.
+1. "amount": Extraé el monto total pagado como NÚMERO flotante puro sin puntos de miles.
    - Entendé modismos argentinos: "lucas" o "k" = miles (ej: 77 lucas = 77000, 5 k = 5000).
    - NUNCA devuelvas puntos de miles. Si hay centavos, usá punto decimal (ej: 1250.50).
 2. "store": Extraé el nombre del comercio, farmacia, supermercado o marca (ej: Farmacia, Coto, YPF, Shell, Spotify, Farmacity).
@@ -245,6 +282,10 @@ ${catList}
      * "detail": "Gasto no identificado"
      * "category_id": null
      * "subcategory_id": null
+7. "GASTO COMPARTIDO / DEVOLUCIÓN DE TERCEROS":
+   - Si el texto indica que otra persona debe devolver o compartir parte del gasto (ej: "40000 hamburguesas sabri me debe 20000", "cena 30000 sabri la mitad", "2 hamburguesas 40000 una para Sabri", "50k coto sabri 25k"):
+     * "reimbursement_person": Nombre de la persona (ej: "Sabri").
+     * "reimbursement_amount": Monto numérico que esa persona debe devolver (ej: 20000). Si dice "la mitad" o "50%", calculá el 50% del total.
 
 Devolvé ÚNICAMENTE un JSON válido sin markdown:
 {
@@ -254,6 +295,8 @@ Devolvé ÚNICAMENTE un JSON válido sin markdown:
   "date": "YYYY-MM-DD",
   "category_id": <id o null>,
   "subcategory_id": <id o null>,
+  "reimbursement_person": "<nombre o null>",
+  "reimbursement_amount": <número o null>,
   "confidence": <número entre 0 y 1>
 }
 
@@ -285,6 +328,8 @@ Texto del usuario a analizar: "${text}"`;
         categoryId: isUnidentified ? (null as any) : (parsed.category_id || categories[0]?.id || 1),
         subcategoryId: isUnidentified ? (null as any) : (parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1),
         confidence: parsed.confidence || 0.9,
+        reimbursementPerson: parsed.reimbursement_person || undefined,
+        reimbursementAmount: parsed.reimbursement_amount ? parseNumericAmount(parsed.reimbursement_amount) : undefined,
         raw,
       };
     } catch (err) {
@@ -305,6 +350,8 @@ export interface ParsedItem {
   subcategoryId: number;
   notes?: string;
   confidence?: number;
+  reimbursementPerson?: string;
+  reimbursementAmount?: number;
 }
 
 export interface MultiItemParseResult {
@@ -317,6 +364,146 @@ export interface MultiItemParseResult {
   discounts?: number;
   shipping?: number;
   raw?: string;
+}
+
+// ─── Carga de Múltiples Gastos en un Solo Mensaje (Multi-línea) ───────────────
+
+export async function parseMultiExpenseTextWithAI(
+  text: string,
+  categories: Array<{ id: number; name: string; subcategories: Array<{ id: number; name: string }> }>,
+  overrideDate?: string
+): Promise<MultiItemParseResult> {
+  const today = overrideDate || new Date().toISOString().split('T')[0];
+  const apiKey = getApiKey();
+
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+  if (!apiKey || lines.length === 0) {
+    const items: ParsedItem[] = lines.map(line => {
+      const h = parseLocalHeuristic(line, categories, today);
+      return {
+        detail: h.detail || 'Gasto',
+        store: h.store || '',
+        amount: h.amount,
+        categoryId: (h.categoryId || categories[0]?.id || 1),
+        subcategoryId: (h.subcategoryId || categories[0]?.subcategories[0]?.id || 1),
+        reimbursementPerson: h.reimbursementPerson,
+        reimbursementAmount: h.reimbursementAmount,
+        confidence: h.confidence || 0.8,
+      };
+    });
+    return {
+      isMultiItem: true,
+      store: items[0]?.store || '',
+      date: today,
+      items,
+      totalDetected: items.reduce((s, it) => s + it.amount, 0),
+    };
+  }
+
+  const catList = categories
+    .map(c => `${c.id}:${c.name} [${c.subcategories.map(s => `${s.id}:${s.name}`).join(', ')}]`)
+    .join('\n');
+
+  const prompt = `Sos un asistente experto de finanzas personales argentino. El usuario ingresó varios gastos en un solo mensaje (múltiples líneas o renglones).
+Analizá cada uno y devolvé una lista de items independientes.
+
+Categorías disponibles:
+${catList}
+Fecha actual de referencia: ${today}
+
+Instrucciones por cada línea de gasto:
+- "detail": Descripción del gasto o producto (ej: "Milanesas de pollo", "Nafta super", "Ibuprofeno", "Gasto no identificado").
+- "store": Comercio, local o marca si figura (ej: "Pollajería", "YPF", "Coto").
+- "amount": Monto total flotante puro sin puntos de miles.
+- "category_id" y "subcategory_id": IDs de categoría más adecuada (o null si es no identificado).
+- "reimbursement_person": Nombre de persona si es gasto compartido con devolución pendiente (ej: "Sabri").
+- "reimbursement_amount": Monto a devolver por esa persona.
+
+Devolvé ÚNICAMENTE un JSON con esta estructura:
+{
+  "is_multi_item": true,
+  "date": "${today}",
+  "total_amount": <suma total de todos los gastos>,
+  "items": [
+    {
+      "detail": "<detalle>",
+      "store": "<comercio>",
+      "amount": <monto numérico>,
+      "category_id": <id>,
+      "subcategory_id": <id>,
+      "reimbursement_person": "<persona o null>",
+      "reimbursement_amount": <monto o null>,
+      "confidence": 0.95
+    }
+  ]
+}
+
+Texto del usuario a analizar:
+"""${text}"""`;
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        }
+      });
+      const result = await model.generateContent(prompt);
+      const raw = result.response.text().trim();
+      const parsed = extractJsonFromResponse(raw);
+
+      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        const itemsList: ParsedItem[] = parsed.items.map((it: any) => ({
+          detail: it.detail || 'Gasto',
+          store: it.store || '',
+          amount: parseNumericAmount(it.amount),
+          categoryId: it.category_id || categories[0]?.id || 1,
+          subcategoryId: it.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+          reimbursementPerson: it.reimbursement_person || undefined,
+          reimbursementAmount: it.reimbursement_amount ? parseNumericAmount(it.reimbursement_amount) : undefined,
+          confidence: it.confidence || 0.9,
+        }));
+
+        return {
+          isMultiItem: true,
+          store: itemsList[0]?.store || '',
+          date: parsed.date || today,
+          items: itemsList,
+          totalDetected: parseNumericAmount(parsed.total_amount) || itemsList.reduce((s, it) => s + it.amount, 0),
+          raw,
+        };
+      }
+    } catch (err) {
+      console.warn(`Multi-line model ${modelName} falló:`, err);
+    }
+  }
+
+  // Fallback heurístico si la IA no responde
+  const fallbackItems: ParsedItem[] = lines.map(line => {
+    const h = parseLocalHeuristic(line, categories, today);
+    return {
+      detail: h.detail || 'Gasto',
+      store: h.store || '',
+      amount: h.amount,
+      categoryId: (h.categoryId || categories[0]?.id || 1),
+      subcategoryId: (h.subcategoryId || categories[0]?.subcategories[0]?.id || 1),
+      reimbursementPerson: h.reimbursementPerson,
+      reimbursementAmount: h.reimbursementAmount,
+      confidence: h.confidence || 0.8,
+    };
+  });
+
+  return {
+    isMultiItem: true,
+    store: fallbackItems[0]?.store || '',
+    date: today,
+    items: fallbackItems,
+    totalDetected: fallbackItems.reduce((s, it) => s + it.amount, 0),
+  };
 }
 
 export async function parseTicketImagesWithAI(

@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets, syncMissingExpensesToSheets } from '@/lib/db';
-import { parseExpenseWithAI, parseTicketImagesWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
+import { db, seedDatabase, getCategoriesWithSubs, formatARS, syncMovementToGoogleSheets, syncToSheets, syncMissingExpensesToSheets, settleExpenseReimbursement } from '@/lib/db';
+import { parseExpenseWithAI, parseTicketImagesWithAI, parseMultiExpenseTextWithAI, categorizePendingExpensesWithAI, parseNumericAmount, parseLocalHeuristic } from '@/lib/ai';
 import type { ParsedItem } from '@/lib/ai';
 import { Modal } from '@/components/Modal';
+
+const DRAFT_KEY = 'misfinanzas_home_draft';
 
 export default function HomePage() {
   const [inputMode, setInputMode] = useState<'ai' | 'form'>('ai');
@@ -20,6 +22,7 @@ export default function HomePage() {
   const [syncingSheets, setSyncingSheets] = useState(false);
   const [syncingMissing, setSyncingMissing] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -42,7 +45,12 @@ export default function HomePage() {
   const [editingExpenseId, setEditingExpenseId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  // Modal de Desglose Multi-Artículo (ej: Carrito MercadoLibre / Ticket Super)
+  // Gasto Compartido / Reintegro de Terceros
+  const [isShared, setIsShared] = useState(false);
+  const [reimbursementPerson, setReimbursementPerson] = useState('');
+  const [reimbursementAmount, setReimbursementAmount] = useState('');
+
+  // Modal de Desglose Multi-Artículo (ej: Carrito MercadoLibre / Ticket Super / Multi-Líneas)
   const [showMultiModal, setShowMultiModal] = useState(false);
   const [multiItems, setMultiItems] = useState<ParsedItem[]>([]);
   const [multiStore, setMultiStore] = useState('MercadoLibre');
@@ -68,7 +76,31 @@ export default function HomePage() {
   useEffect(() => {
     const init = async () => {
       await seedDatabase();
-      loadData();
+      await loadData();
+
+      // Restaurar borrador de inicio si existe
+      try {
+        const savedDraft = typeof window !== 'undefined' ? localStorage.getItem(DRAFT_KEY) : null;
+        if (savedDraft) {
+          const d = JSON.parse(savedDraft);
+          const hasData = (d.text && d.text.trim()) || (d.imagesBase64 && d.imagesBase64.length > 0) || (d.amount && d.amount.trim()) || (d.detail && d.detail.trim());
+          if (hasData) {
+            if (d.text) setText(d.text);
+            if (d.date) setDate(d.date);
+            if (d.inputMode) setInputMode(d.inputMode);
+            if (d.amount) setAmount(d.amount);
+            if (d.store) setStore(d.store);
+            if (d.detail) setDetail(d.detail);
+            if (d.selectedCatId) setSelectedCatId(d.selectedCatId);
+            if (d.selectedSubId) setSelectedSubId(d.selectedSubId);
+            if (d.imagesBase64 && d.imagesBase64.length > 0) setImagesBase64(d.imagesBase64);
+            if (d.isShared) setIsShared(d.isShared);
+            if (d.reimbursementPerson) setReimbursementPerson(d.reimbursementPerson);
+            if (d.reimbursementAmount) setReimbursementAmount(d.reimbursementAmount);
+            setDraftRestored(true);
+          }
+        }
+      } catch (_) {}
     };
     init();
 
@@ -101,6 +133,44 @@ export default function HomePage() {
     window.addEventListener('paste', handleGlobalPaste);
     return () => window.removeEventListener('paste', handleGlobalPaste);
   }, []);
+
+  // Auto-guardado en localStorage ante cambios en el formulario de inicio
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hasData = text.trim() || imagesBase64.length > 0 || amount.trim() || store.trim() || detail.trim() || reimbursementPerson.trim();
+    if (hasData) {
+      const draft = {
+        text,
+        date,
+        inputMode,
+        amount,
+        store,
+        detail,
+        selectedCatId,
+        selectedSubId,
+        imagesBase64,
+        isShared,
+        reimbursementPerson,
+        reimbursementAmount,
+        updatedAt: Date.now()
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    }
+  }, [text, date, inputMode, amount, store, detail, selectedCatId, selectedSubId, imagesBase64, isShared, reimbursementPerson, reimbursementAmount]);
+
+  const handleDiscardDraft = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(DRAFT_KEY);
+    }
+    resetForm(false);
+    setImagesBase64([]);
+    setText('');
+    setIsShared(false);
+    setReimbursementPerson('');
+    setReimbursementAmount('');
+    setDraftRestored(false);
+    showToast('🗑️ Borrador descartado', 'info', 2000);
+  };
 
   const loadData = async () => {
     const cats = await getCategoriesWithSubs();
@@ -233,6 +303,9 @@ export default function HomePage() {
     setSelectedCatId(null);
     setSelectedSubId(null);
     setEditingExpenseId(null);
+    setIsShared(false);
+    setReimbursementPerson('');
+    setReimbursementAmount('');
     if (!keepDate) {
       setDate(new Date().toISOString().split('T')[0]);
     }
@@ -247,6 +320,7 @@ export default function HomePage() {
     resetForm(true);
 
     const analysisDate = currentSelectedDate;
+    const textLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
     try {
       if (imagesBase64.length > 0) {
@@ -276,12 +350,29 @@ export default function HomePage() {
           setDate(multiResult.date || analysisDate);
           setSelectedCatId(first.categoryId || null);
           setSelectedSubId(first.subcategoryId || null);
+          if (first.reimbursementPerson || first.reimbursementAmount) {
+            setIsShared(true);
+            setReimbursementPerson(first.reimbursementPerson || '');
+            setReimbursementAmount(first.reimbursementAmount ? first.reimbursementAmount.toString() : '');
+          }
           setShowModal(true);
+          return;
+        }
+      } else if (textLines.length > 1) {
+        // Carga de Múltiples Gastos en un Solo Mensaje (Multi-línea)
+        const multiTextResult = await parseMultiExpenseTextWithAI(text, categories, analysisDate);
+        if (multiTextResult.isMultiItem && multiTextResult.items.length > 1) {
+          setMultiStore(multiTextResult.store || '');
+          setMultiDate(multiTextResult.date || analysisDate);
+          setMultiItems(multiTextResult.items);
+          setMultiTotalDetected(multiTextResult.totalDetected || null);
+          setMultiCartExpected(multiTextResult.items.length);
+          setShowMultiModal(true);
           return;
         }
       }
 
-      // Análisis de texto puro
+      // Análisis de texto puro (1 solo gasto)
       const result = await parseExpenseWithAI(text, categories, analysisDate);
       if (result) {
         setAmount(result.amount > 0 ? result.amount.toString() : '');
@@ -290,6 +381,11 @@ export default function HomePage() {
         setDate(result.date || analysisDate);
         setSelectedCatId(result.categoryId || null);
         setSelectedSubId(result.subcategoryId || null);
+        if (result.reimbursementPerson || result.reimbursementAmount) {
+          setIsShared(true);
+          setReimbursementPerson(result.reimbursementPerson || '');
+          setReimbursementAmount(result.reimbursementAmount ? result.reimbursementAmount.toString() : '');
+        }
         setShowModal(true);
       }
     } catch (err: any) {
@@ -301,6 +397,11 @@ export default function HomePage() {
       setDate(fallback.date || analysisDate);
       setSelectedCatId(fallback.categoryId || null);
       setSelectedSubId(fallback.subcategoryId || null);
+      if (fallback.reimbursementPerson || fallback.reimbursementAmount) {
+        setIsShared(true);
+        setReimbursementPerson(fallback.reimbursementPerson || '');
+        setReimbursementAmount(fallback.reimbursementAmount ? fallback.reimbursementAmount.toString() : '');
+      }
       showToast('💡 Completado con análisis inteligente rápido', 'info', 3000);
       setShowModal(true);
     } finally {
@@ -369,6 +470,9 @@ export default function HomePage() {
         const catObj = categories.find(c => c.id === catId);
         const subObj = catObj?.subcategories?.find((s: any) => s.id === subId);
 
+        const itemReimbAmount = it.reimbursementAmount ? parseFloat(it.reimbursementAmount as any) : undefined;
+        const itemHasReimb = it.reimbursementPerson && itemReimbAmount && itemReimbAmount > 0;
+
         const expData = {
           date: multiDate,
           amount: numAmount,
@@ -378,7 +482,10 @@ export default function HomePage() {
           category_id: catId,
           subcategory_id: subId,
           status: 'active' as const,
-          module_origin: 'ticket_vision' as const,
+          module_origin: imagesBase64.length > 0 ? ('ticket_vision' as const) : ('multiline_ai' as const),
+          reimbursement_person: itemHasReimb ? it.reimbursementPerson?.trim() : undefined,
+          reimbursement_amount: itemHasReimb ? itemReimbAmount : undefined,
+          reimbursement_status: itemHasReimb ? ('pending' as const) : undefined,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -392,12 +499,17 @@ export default function HomePage() {
           comercio: (it.store || multiStore).trim(),
           detalle: it.detail.trim(),
           monto: numAmount,
-          notas: it.notes || '',
+          notas: (it.notes || '') + (itemHasReimb ? ` · [Devolución pendiente: ${it.reimbursementPerson} debe $${itemReimbAmount}]` : ''),
         });
 
         // Pausa secuencial para garantizar escritura ordenada en Google Sheets
         await new Promise(r => setTimeout(r, 450));
       }
+
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(DRAFT_KEY);
+      }
+      setDraftRestored(false);
 
       showToast(`✅ ¡${multiItems.length} gastos guardados y sincronizados individualmente en Sheets!`, 'success', 5000);
       setShowMultiModal(false);
@@ -421,6 +533,15 @@ export default function HomePage() {
     setSelectedCatId(exp.category_id || null);
     setSelectedSubId(exp.subcategory_id || null);
     setNotes(exp.notes || '');
+    if (exp.reimbursement_person) {
+      setIsShared(true);
+      setReimbursementPerson(exp.reimbursement_person || '');
+      setReimbursementAmount(exp.reimbursement_amount ? exp.reimbursement_amount.toString() : '');
+    } else {
+      setIsShared(false);
+      setReimbursementPerson('');
+      setReimbursementAmount('');
+    }
     setShowModal(true);
   };
 
@@ -433,6 +554,15 @@ export default function HomePage() {
     setSelectedCatId(exp.category_id || null);
     setSelectedSubId(exp.subcategory_id || null);
     setNotes(exp.notes || '');
+    if (exp.reimbursement_person) {
+      setIsShared(true);
+      setReimbursementPerson(exp.reimbursement_person || '');
+      setReimbursementAmount(exp.reimbursement_amount ? exp.reimbursement_amount.toString() : '');
+    } else {
+      setIsShared(false);
+      setReimbursementPerson('');
+      setReimbursementAmount('');
+    }
     setShowModal(true);
   };
 
@@ -453,6 +583,9 @@ export default function HomePage() {
     const catObj = categories.find(c => c.id === catId);
     const subObj = catObj?.subcategories?.find((s: any) => s.id === subId);
 
+    const numReimb = isShared && reimbursementAmount ? parseNumericAmount(reimbursementAmount) : undefined;
+    const hasReimb = isShared && numReimb && numReimb > 0;
+
     const expenseData = {
       date,
       amount: numAmount,
@@ -463,6 +596,9 @@ export default function HomePage() {
       subcategory_id: subId,
       status: 'active' as const,
       module_origin: imagesBase64.length > 0 ? 'ticket_vision' as const : 'general' as const,
+      reimbursement_person: hasReimb && reimbursementPerson ? reimbursementPerson.trim() : undefined,
+      reimbursement_amount: hasReimb ? numReimb : undefined,
+      reimbursement_status: hasReimb ? ('pending' as const) : undefined,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -478,7 +614,7 @@ export default function HomePage() {
         comercio: store.trim(),
         detalle: detail.trim(),
         monto: numAmount,
-        notas: notes,
+        notas: notes + (hasReimb ? ` · [Devolución pendiente: ${reimbursementPerson} debe $${numReimb}]` : ''),
       });
       showToast('✅ Gasto actualizado correctamente', 'success');
     } else {
@@ -492,10 +628,15 @@ export default function HomePage() {
         comercio: store.trim(),
         detalle: detail.trim(),
         monto: numAmount,
-        notas: notes,
+        notas: notes + (hasReimb ? ` · [Devolución pendiente: ${reimbursementPerson} debe $${numReimb}]` : ''),
       });
       showToast('✅ Gasto guardado con éxito', 'success');
     }
+
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(DRAFT_KEY);
+    }
+    setDraftRestored(false);
 
     setSaved(true);
     setTimeout(() => {
@@ -511,6 +652,9 @@ export default function HomePage() {
         setDetail('');
         setSelectedCatId(null);
         setSelectedSubId(null);
+        setIsShared(false);
+        setReimbursementPerson('');
+        setReimbursementAmount('');
       } else {
         setAmount('');
         setStore('');
@@ -519,6 +663,9 @@ export default function HomePage() {
         setNotes('');
         setSelectedCatId(null);
         setSelectedSubId(null);
+        setIsShared(false);
+        setReimbursementPerson('');
+        setReimbursementAmount('');
       }
       loadData();
     }, 800);
@@ -703,17 +850,44 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Banner de Borrador Recuperado si existía contenido previo */}
+      {draftRestored && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: 'rgba(99, 102, 241, 0.15)',
+          border: '1px solid var(--accent)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '8px 12px',
+          marginBottom: 12,
+          fontSize: 12
+        }}>
+          <span style={{ color: 'var(--text-primary)' }}>
+            📝 <strong>Borrador recuperado</strong> (lo que estabas anotando se mantuvo)
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={handleDiscardDraft}
+            style={{ fontSize: 11, padding: '2px 8px', color: '#ef4444' }}
+          >
+            ✕ Descartar
+          </button>
+        </div>
+      )}
+
       {/* Tabs de Selección de Modo */}
       <div className="chips-row" style={{ marginBottom: 14 }}>
         <button
           className={`chip${inputMode === 'ai' ? ' active' : ''}`}
-          onClick={() => { setInputMode('ai'); resetForm(); setText(''); setImagesBase64([]); }}
+          onClick={() => { setInputMode('ai'); }}
         >
           ✨ Cargar con IA / Foto / Texto
         </button>
         <button
           className={`chip${inputMode === 'form' ? ' active' : ''}`}
-          onClick={() => { setInputMode('form'); resetForm(); }}
+          onClick={() => { setInputMode('form'); }}
         >
           📝 Formulario Rápido (Comercio + Detalle + Monto)
         </button>
@@ -837,7 +1011,7 @@ export default function HomePage() {
             ref={textareaRef}
             id="expense-text-input"
             className="form-textarea"
-            placeholder='Ej: "15000, Coto, Asado y verduras" o "20000, no identificado" o pegá fotos...'
+            placeholder={'Ej: "15000, Coto, Carnes" o "40000 hamburguesas sabri me debe 20000" o pegá varios renglones para múltiples gastos...'}
             value={text}
             onChange={e => setText(e.target.value)}
             onPaste={handleTextareaPaste}
@@ -860,23 +1034,30 @@ export default function HomePage() {
             onChange={e => setDate(e.target.value)}
           />
 
-          <button
-            id="analyze-btn"
-            className="btn btn-primary"
-            style={{ marginTop: 14 }}
-            onClick={handleAnalyze}
-            disabled={loading || (!text.trim() && imagesBase64.length === 0)}
-          >
-            {loading
-              ? '🧠 Analizando con IA...'
-              : imagesBase64.length > 1
-              ? `✨ Analizar ${imagesBase64.length} Fotos con IA`
-              : imagesBase64.length === 1 && text
-              ? '✨ Analizar Texto + Foto'
-              : imagesBase64.length === 1
-              ? '📸 Leer Ticket con IA'
-              : '✨ Analizar Texto con IA'}
-          </button>
+          {(() => {
+            const currentTextLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            return (
+              <button
+                id="analyze-btn"
+                className="btn btn-primary"
+                style={{ marginTop: 14 }}
+                onClick={handleAnalyze}
+                disabled={loading || (!text.trim() && imagesBase64.length === 0)}
+              >
+                {loading
+                  ? '🧠 Analizando con IA...'
+                  : imagesBase64.length > 1
+                  ? `✨ Analizar ${imagesBase64.length} Fotos con IA`
+                  : imagesBase64.length === 1 && text
+                  ? '✨ Analizar Texto + Foto'
+                  : imagesBase64.length === 1
+                  ? '📸 Leer Ticket con IA'
+                  : currentTextLines.length > 1
+                  ? `✨ Analizar ${currentTextLines.length} Gastos con IA`
+                  : '✨ Analizar Texto con IA'}
+              </button>
+            );
+          })()}
         </div>
       ) : (
         /* MODO 2: Formulario Rápido Directo por Campos (Comercio y Detalle independientes) */
@@ -1003,6 +1184,70 @@ export default function HomePage() {
             </div>
           )}
 
+          {/* Gasto Compartido en Formulario Rápido */}
+          <div style={{ background: 'var(--bg-elevated)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', margin: '10px 0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label htmlFor="direct-shared-check" style={{ fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                👥 Gasto compartido (Me deben plata)
+              </label>
+              <input
+                type="checkbox"
+                id="direct-shared-check"
+                checked={isShared}
+                onChange={e => {
+                  setIsShared(e.target.checked);
+                  if (e.target.checked && amount && !reimbursementAmount) {
+                    const half = Math.round((parseFloat(amount) / 2) * 100) / 100;
+                    if (!isNaN(half)) setReimbursementAmount(half.toString());
+                  }
+                }}
+                style={{ width: 18, height: 18, accentColor: 'var(--accent)' }}
+              />
+            </div>
+
+            {isShared && (
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 8 }}>
+                <div>
+                  <label className="form-label" style={{ fontSize: 11 }}>Persona que te debe</label>
+                  <input
+                    className="form-input"
+                    value={reimbursementPerson}
+                    onChange={e => setReimbursementPerson(e.target.value)}
+                    placeholder="Ej: Sabri, Juan..."
+                    style={{ fontSize: 13 }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                    <label className="form-label" style={{ fontSize: 11, marginBottom: 0 }}>Monto a devolver ($)</label>
+                    {amount && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 10, padding: '1px 4px', color: 'var(--accent-light)' }}
+                        onClick={() => {
+                          const half = Math.round((parseFloat(amount) / 2) * 100) / 100;
+                          if (!isNaN(half)) setReimbursementAmount(half.toString());
+                        }}
+                      >
+                        50%
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    className="form-input"
+                    type="text"
+                    inputMode="decimal"
+                    value={reimbursementAmount}
+                    onChange={e => setReimbursementAmount(e.target.value)}
+                    placeholder="0"
+                    style={{ fontSize: 13 }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           <button
             id="save-direct-btn"
             className="btn btn-success"
@@ -1041,6 +1286,56 @@ export default function HomePage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Badge de Reintegro / Gasto Compartido */}
+                {exp.reimbursement_person && exp.reimbursement_status === 'pending' && (
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    background: 'rgba(245, 158, 11, 0.12)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    borderRadius: 8,
+                    padding: '6px 10px',
+                    fontSize: 12
+                  }}>
+                    <span style={{ color: 'var(--warning)', fontWeight: 700 }}>
+                      ⏳ {exp.reimbursement_person} te debe {formatARS(exp.reimbursement_amount || 0)}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-success btn-sm"
+                      style={{ fontSize: 11, padding: '3px 8px', height: 'auto' }}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = await settleExpenseReimbursement(exp.id!);
+                        if (ok) {
+                          showToast(`🎉 ¡Cobro de ${formatARS(exp.reimbursement_amount)} de ${exp.reimbursement_person} registrado!`, 'success', 4000);
+                          loadData();
+                        }
+                      }}
+                    >
+                      ✅ Cobrado
+                    </button>
+                  </div>
+                )}
+
+                {exp.reimbursement_person && exp.reimbursement_status === 'settled' && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(34, 197, 94, 0.1)',
+                    border: '1px solid rgba(34, 197, 94, 0.3)',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    color: 'var(--positive)',
+                    fontWeight: 600
+                  }}>
+                    <span>✅ Devolución de {exp.reimbursement_person} ({formatARS(exp.reimbursement_amount || 0)}) cobrada</span>
+                  </div>
+                )}
 
                 {/* Fila inferior: Monto a la izquierda y Botones ABM a la derecha */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1176,6 +1471,70 @@ export default function HomePage() {
             <div className="form-group">
               <label className="form-label">Notas o Medio de pago (opcional)</label>
               <input id="modal-notes" className="form-input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ej: MercadoPago, Débito, Efectivo..." />
+            </div>
+
+            {/* Gasto Compartido en Modal de Confirmación */}
+            <div style={{ background: 'var(--bg-elevated)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', margin: '12px 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label htmlFor="modal-shared-check" style={{ fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  👥 Gasto compartido (Me deben plata)
+                </label>
+                <input
+                  type="checkbox"
+                  id="modal-shared-check"
+                  checked={isShared}
+                  onChange={e => {
+                    setIsShared(e.target.checked);
+                    if (e.target.checked && amount && !reimbursementAmount) {
+                      const half = Math.round((parseFloat(amount) / 2) * 100) / 100;
+                      if (!isNaN(half)) setReimbursementAmount(half.toString());
+                    }
+                  }}
+                  style={{ width: 18, height: 18, accentColor: 'var(--accent)' }}
+                />
+              </div>
+
+              {isShared && (
+                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 8 }}>
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11 }}>Persona que te debe</label>
+                    <input
+                      className="form-input"
+                      value={reimbursementPerson}
+                      onChange={e => setReimbursementPerson(e.target.value)}
+                      placeholder="Ej: Sabri, Juan..."
+                      style={{ fontSize: 13 }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                      <label className="form-label" style={{ fontSize: 11, marginBottom: 0 }}>Monto a devolver ($)</label>
+                      {amount && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '1px 4px', color: 'var(--accent-light)' }}
+                          onClick={() => {
+                            const half = Math.round((parseFloat(amount) / 2) * 100) / 100;
+                            if (!isNaN(half)) setReimbursementAmount(half.toString());
+                          }}
+                        >
+                          50%
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      className="form-input"
+                      type="text"
+                      inputMode="decimal"
+                      value={reimbursementAmount}
+                      onChange={e => setReimbursementAmount(e.target.value)}
+                      placeholder="0"
+                      style={{ fontSize: 13 }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0' }}>
@@ -1419,6 +1778,52 @@ export default function HomePage() {
                         ))}
                       </div>
                     )}
+
+                    {/* Gasto compartido opcional por ítem */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', flexShrink: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!(item.reimbursementPerson || item.reimbursementAmount)}
+                          onChange={e => {
+                            const active = e.target.checked;
+                            setMultiItems(prev => prev.map((it, i) => i === idx ? {
+                              ...it,
+                              reimbursementPerson: active ? 'Sabri' : undefined,
+                              reimbursementAmount: active ? (Math.round(((parseFloat(it.amount as any) || 0) / 2) * 100) / 100) : undefined,
+                            } : it));
+                          }}
+                          style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
+                        />
+                        👥 Compartido
+                      </label>
+                      {!!(item.reimbursementPerson || item.reimbursementAmount) && (
+                        <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+                          <input
+                            className="form-input"
+                            style={{ fontSize: 11, padding: '2px 6px', height: 26, flex: 1 }}
+                            placeholder="Persona (ej: Sabri)"
+                            value={item.reimbursementPerson || ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setMultiItems(prev => prev.map((it, i) => i === idx ? { ...it, reimbursementPerson: val } : it));
+                            }}
+                          />
+                          <input
+                            className="form-input"
+                            style={{ fontSize: 11, padding: '2px 6px', height: 26, width: 85 }}
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="$ a devolver"
+                            value={item.reimbursementAmount ?? ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setMultiItems(prev => prev.map((it, i) => i === idx ? { ...it, reimbursementAmount: val as any } : it));
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

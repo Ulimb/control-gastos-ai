@@ -29,6 +29,9 @@ export interface Expense {
   status: 'active' | 'anulado';
   module_origin?: string;
   module_reference_id?: number;
+  reimbursement_person?: string; // Nombre de quien debe devolver (ej: "Sabri")
+  reimbursement_amount?: number; // Monto a devolver (ej: 20000)
+  reimbursement_status?: 'pending' | 'settled'; // Estado de la devolución
   created_at?: string;
   updated_at?: string;
 }
@@ -428,6 +431,46 @@ export async function syncMovementToGoogleSheets(movement: {
   expenseId?: number;
 }) {
   return await syncToSheets('add', movement.expenseId || 0, movement);
+}
+
+// ─── Cobrar / Saldar Devolución de Gasto Compartido ──────────────────────────
+
+export async function settleExpenseReimbursement(expenseId: number, returnDate?: string): Promise<boolean> {
+  const exp = await db.expenses.get(expenseId);
+  if (!exp || !exp.reimbursement_amount) return false;
+
+  const date = returnDate || new Date().toISOString().split('T')[0];
+  const person = exp.reimbursement_person || 'Tercero';
+  const amount = exp.reimbursement_amount;
+
+  // 1. Actualizar el estado del gasto a 'settled'
+  await db.expenses.update(expenseId, {
+    reimbursement_status: 'settled',
+    notes: (exp.notes ? exp.notes + ' · ' : '') + `[Devolución de ${person} por $${amount} cobrada el ${date}]`,
+    updated_at: new Date().toISOString(),
+  });
+
+  // 2. Registrar en la tabla de reintegros vinculados para trazabilidad
+  await db.reintegros.add({
+    date,
+    amount,
+    description: `Devolución de ${person} (${exp.detail || exp.store || 'Gasto'})`,
+    type: 'linked',
+    linked_expense_id: expenseId,
+    created_at: new Date().toISOString(),
+  });
+
+  // 3. Sincronizar actualización con Google Sheets
+  await syncToSheets('update', expenseId, {
+    fecha: exp.date,
+    tipo: 'Gasto',
+    comercio: exp.store || '',
+    detalle: exp.detail || '',
+    monto: exp.amount,
+    notas: (exp.notes ? exp.notes + ' · ' : '') + `[Devolución de ${person} por $${amount} cobrada]`,
+  });
+
+  return true;
 }
 
 // ─── Sincronizar Gastos Locales Faltantes en Sheets ────────────────────────────
