@@ -84,6 +84,20 @@ export function parseLocalHeuristic(
     }
   }
 
+  // Detección directa de gasto no identificado / sin recordar
+  const isUnidentified = /\b(no identificado|sin identificar|desconocido|no me acuerdo|no recuerdo|olvidado|no se|sin detalle)\b/i.test(cleanText);
+  if (isUnidentified) {
+    return {
+      amount,
+      store: '',
+      detail: 'Gasto no identificado',
+      date: calculatedDate,
+      categoryId: null as any,
+      subcategoryId: null as any,
+      confidence: 0.95,
+    };
+  }
+
   cleanText = cleanText.replace(/^[,;.\s]+|[,;.\s]+$/g, '');
   const parts = cleanText.split(/[,;\n]+/).map(p => p.trim()).filter(Boolean);
   let store = '';
@@ -107,8 +121,8 @@ export function parseLocalHeuristic(
     }
   }
 
-  let categoryId = categories[0]?.id || 1;
-  let subcategoryId = categories[0]?.subcategories[0]?.id || 1;
+  let categoryId: number | null = categories[0]?.id || 1;
+  let subcategoryId: number | null = categories[0]?.subcategories[0]?.id || 1;
   let confidence = 0.6;
 
   const fullSearch = (store + ' ' + detail).toLowerCase();
@@ -212,7 +226,7 @@ export async function parseExpenseWithAI(
 
   const prompt = `Sos un asistente experto de finanzas personales argentino. Analizá el texto libre ingresado por el usuario y auto-identificá inteligentemente cada componente.
 
-El usuario puede escribir en cualquier formato libre (ej: "42000, farmacia", "77 lucas nafta ypf ayer", "coto 15000 carne y verduras", "60000 ypf nafta super", "gaste 5 mil en farmacity ibuprofeno").
+El usuario puede escribir en cualquier formato libre (ej: "42000, farmacia", "77 lucas nafta ypf ayer", "coto 15000 carne y verduras", "60000 ypf nafta super", "20000 no identificado", "5000 no me acuerdo").
 
 Instrucciones:
 1. "amount": Extraé el monto total como NÚMERO flotante puro sin puntos de miles.
@@ -225,6 +239,12 @@ Instrucciones:
    - Si no menciona fecha, usá ${today}.
 5. "category_id" y "subcategory_id": Seleccioná la categoría y subcategoría id más adecuada de esta lista:
 ${catList}
+6. "GASTO NO IDENTIFICADO / OLVIDADO":
+   - Si el usuario indica que no sabe o no recuerda en qué gastó (ej: "20000 no identificado", "15000 sin identificar", "no me acuerdo 5000", "gasto desconocido", "30k sin detalle"):
+     * "store": ""
+     * "detail": "Gasto no identificado"
+     * "category_id": null
+     * "subcategory_id": null
 
 Devolvé ÚNICAMENTE un JSON válido sin markdown:
 {
@@ -232,8 +252,8 @@ Devolvé ÚNICAMENTE un JSON válido sin markdown:
   "store": "<comercio>",
   "detail": "<detalle>",
   "date": "YYYY-MM-DD",
-  "category_id": <id>,
-  "subcategory_id": <id>,
+  "category_id": <id o null>,
+  "subcategory_id": <id o null>,
   "confidence": <número entre 0 y 1>
 }
 
@@ -255,13 +275,15 @@ Texto del usuario a analizar: "${text}"`;
       const raw = result.response.text().trim();
       const parsed = extractJsonFromResponse(raw);
 
+      const isUnidentified = parsed.category_id === null || !parsed.category_id || (parsed.detail && /no identificado|desconocido|no me acuerdo|sin identificar/i.test(parsed.detail));
+
       return {
         amount: parseNumericAmount(parsed.amount),
-        detail: parsed.detail || text,
-        store: parsed.store || '',
+        detail: isUnidentified ? 'Gasto no identificado' : (parsed.detail || text),
+        store: isUnidentified ? '' : (parsed.store || ''),
         date: parsed.date || today,
-        categoryId: parsed.category_id || categories[0]?.id || 1,
-        subcategoryId: parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1,
+        categoryId: isUnidentified ? (null as any) : (parsed.category_id || categories[0]?.id || 1),
+        subcategoryId: isUnidentified ? (null as any) : (parsed.subcategory_id || categories[0]?.subcategories[0]?.id || 1),
         confidence: parsed.confidence || 0.9,
         raw,
       };

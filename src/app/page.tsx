@@ -225,7 +225,7 @@ export default function HomePage() {
     }
   };
 
-  const resetForm = () => {
+  const resetForm = (keepDate = false) => {
     setAmount('');
     setStore('');
     setDetail('');
@@ -233,17 +233,20 @@ export default function HomePage() {
     setSelectedCatId(null);
     setSelectedSubId(null);
     setEditingExpenseId(null);
-    setDate(new Date().toISOString().split('T')[0]);
+    if (!keepDate) {
+      setDate(new Date().toISOString().split('T')[0]);
+    }
   };
 
   const handleAnalyze = async () => {
     if (!text.trim() && imagesBase64.length === 0) return;
     setLoading(true);
 
-    // Limpiar datos anteriores antes de analizar
-    resetForm();
+    // Preservar la fecha explícitamente elegida por el usuario antes de analizar
+    const currentSelectedDate = date || new Date().toISOString().split('T')[0];
+    resetForm(true);
 
-    const analysisDate = date || new Date().toISOString().split('T')[0];
+    const analysisDate = currentSelectedDate;
 
     try {
       if (imagesBase64.length > 0) {
@@ -284,7 +287,7 @@ export default function HomePage() {
         setAmount(result.amount > 0 ? result.amount.toString() : '');
         setStore(result.store || '');
         setDetail(result.detail || '');
-        setDate(result.date);
+        setDate(result.date || analysisDate);
         setSelectedCatId(result.categoryId || null);
         setSelectedSubId(result.subcategoryId || null);
         setShowModal(true);
@@ -295,7 +298,7 @@ export default function HomePage() {
       setAmount(fallback.amount > 0 ? fallback.amount.toString() : '');
       setStore(fallback.store || '');
       setDetail(fallback.detail || text || '');
-      setDate(fallback.date);
+      setDate(fallback.date || analysisDate);
       setSelectedCatId(fallback.categoryId || null);
       setSelectedSubId(fallback.subcategoryId || null);
       showToast('💡 Completado con análisis inteligente rápido', 'info', 3000);
@@ -777,7 +780,7 @@ export default function HomePage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
               <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
-                📷 {imagesBase64.length > 0 ? '+ Tomar' : '📷 Tomar Foto'}
+                📷 {imagesBase64.length > 0 ? '+ Tomar' : 'Tomar Foto'}
                 <input
                   id="ticket-camera-input"
                   type="file"
@@ -788,7 +791,7 @@ export default function HomePage() {
                 />
               </label>
               <label className="btn btn-ghost" style={{ cursor: 'pointer', borderStyle: 'dashed', justifyContent: 'center', padding: '10px 4px', fontSize: 12 }}>
-                🖼️ {imagesBase64.length > 0 ? '+ Galería' : '🖼️ Galería'}
+                🖼️ {imagesBase64.length > 0 ? '+ Galería' : 'Galería'}
                 <input
                   id="ticket-gallery-input"
                   type="file"
@@ -810,14 +813,31 @@ export default function HomePage() {
           </div>
 
           {/* Input de Texto */}
-          <p style={{ fontSize: 12, color: 'var(--accent-light)', marginBottom: 6, fontWeight: 600 }}>
-            💡 Formato sugerido para IA: <span style={{ color: 'var(--text-primary)' }}>Monto, Comercio, Detalle</span>
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <p style={{ fontSize: 12, color: 'var(--accent-light)', margin: 0, fontWeight: 600 }}>
+              💡 Formato: <span style={{ color: 'var(--text-primary)' }}>Monto, Comercio, Detalle</span>
+            </p>
+            <button
+              type="button"
+              className="chip"
+              style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(245, 158, 11, 0.12)', borderColor: 'rgba(245, 158, 11, 0.4)', color: 'var(--warning)' }}
+              onClick={() => {
+                if (!text.trim()) {
+                  setText('no identificado');
+                } else if (!text.toLowerCase().includes('no identificado')) {
+                  setText(prev => prev.trim() + ', no identificado');
+                }
+                textareaRef.current?.focus();
+              }}
+            >
+              ❓ No identificado
+            </button>
+          </div>
           <textarea
             ref={textareaRef}
             id="expense-text-input"
             className="form-textarea"
-            placeholder='Ej: "15000, Coto, Asado y verduras" o "60000, YPF, Nafta super" (o pegá una o más fotos del carrito)...'
+            placeholder='Ej: "15000, Coto, Asado y verduras" o "20000, no identificado" o pegá fotos...'
             value={text}
             onChange={e => setText(e.target.value)}
             onPaste={handleTextareaPaste}
@@ -892,7 +912,23 @@ export default function HomePage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Detalle / Artículo (descripción)</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <label className="form-label" style={{ marginBottom: 0 }}>Detalle / Artículo (descripción)</label>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: 11, padding: '2px 8px', color: 'var(--warning)' }}
+                onClick={() => {
+                  setStore('');
+                  setDetail('Gasto no identificado');
+                  setSelectedCatId(null);
+                  setSelectedSubId(null);
+                  showToast('❓ Marcado como gasto no identificado (Pendiente)', 'info', 2500);
+                }}
+              >
+                ❓ No identificado
+              </button>
+            </div>
             <input
               id="direct-detail"
               className="form-input"
