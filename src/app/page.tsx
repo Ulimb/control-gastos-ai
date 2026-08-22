@@ -467,20 +467,25 @@ export default function HomePage() {
 
     const updated = multiItems.map((it, idx) => {
       const oldAmt = parseFloat(it.amount as any) || 0;
+      let newAmt = 0;
       if (idx === multiItems.length - 1) {
-        const lastAmount = Math.round((targetTotal - runningSum) * 100) / 100;
-        return {
-          ...it,
-          amount: lastAmount,
-          notes: (it.notes ? it.notes + ' · ' : '') + `[${desc || 'Promo'} aplicada. Lista original: $${oldAmt}]`
-        };
+        newAmt = Math.round((targetTotal - runningSum) * 100) / 100;
+      } else {
+        newAmt = Math.round(oldAmt * ratio * 100) / 100;
+        runningSum += newAmt;
       }
-      const newAmt = Math.round(oldAmt * ratio * 100) / 100;
-      runningSum += newAmt;
+
+      const itemDiscount = Math.round((oldAmt - newAmt) * 100) / 100;
+      const cleanDetail = it.detail.replace(/\s*\([^)]*desc[^)]*\)/gi, '').trim();
+      const newDetail = itemDiscount > 0
+        ? `${cleanDetail} (desc. ${formatARS(itemDiscount)})`
+        : cleanDetail;
+
       return {
         ...it,
+        detail: newDetail,
         amount: newAmt,
-        notes: (it.notes ? it.notes + ' · ' : '') + `[${desc || 'Promo'} aplicada. Lista original: $${oldAmt}]`
+        notes: (it.notes ? it.notes + ' · ' : '') + `[${desc || 'Promo'} aplicada. Ahorro: $${itemDiscount} | Precio lista: $${oldAmt}]`
       };
     });
 
