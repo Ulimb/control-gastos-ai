@@ -322,7 +322,7 @@ export function formatARS(value: number): string {
   }).format(value || 0);
 }
 
-export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyggJplPF0t1Y29Br6C3n8Ku4C2baEOwdhsUPA6cyr8Wio4GqDWfe6z9LvI9alL9MDiNg/exec';
+export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzjFpwwpOvKFTTTHb9Quf5J6MgTDCBF-pHQLFgBYIrQogBNqMSIvdvyrGg5oQ31TyaRaw/exec';
 
 // ─── Logging de sincronización ────────────────────────────────────────────────
 
@@ -473,7 +473,34 @@ export async function settleExpenseReimbursement(expenseId: number, returnDate?:
   return true;
 }
 
-// ─── Sincronizar Gastos Locales Faltantes en Sheets ────────────────────────────
+// ─── Sincronizar Configuración de Sueldo con Google Sheets ─────────────────
+
+export async function syncSalaryConfigToSheets(config: SalaryConfig): Promise<{ ok: boolean }> {
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
+  const url = customUrl || APPS_SCRIPT_URL;
+
+  if (!url) return { ok: false };
+
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'save_salary_config',
+        salaryConfig: config,
+      }),
+      mode: 'no-cors',
+      cache: 'no-cache',
+    });
+    console.log('[SYNC] ✅ Configuración de sueldo enviada a Google Sheets', config);
+    return { ok: true };
+  } catch (err) {
+    console.error('[SYNC] ❌ Error al enviar configuración de sueldo:', err);
+    return { ok: false };
+  }
+}
+
+// ─── Sincronizar Gastos e Ingresos Faltantes en Sheets ─────────────────────────
 
 export async function syncMissingExpensesToSheets(
   progressCallback?: (msg: string) => void
@@ -489,17 +516,28 @@ export async function syncMissingExpensesToSheets(
     const json = await res.json();
     const sheetIds = new Set((json.rows || []).map((r: any) => parseInt(r.id)).filter(Boolean));
 
-    // Solo sincronizar gastos creados por la app (ID > 267). Los gastos históricos (1..267) pertenecen a las hojas consolidadas.
+    // 1. Gastos locales creados por la app (ID > 267)
     const localExpenses = await db.expenses
       .where('id')
       .above(267)
       .and(e => e.status === 'active')
       .toArray();
-    const missing = localExpenses.filter(e => e.id && !sheetIds.has(e.id));
+    const missingExpenses = localExpenses.filter(e => e.id && !sheetIds.has(e.id));
 
-    if (missing.length === 0) {
-      progressCallback?.('✅ Todos los gastos ya están sincronizados en Sheets.');
-      return { sent: 0, total: localExpenses.length };
+    // 2. Ingresos locales
+    const localIncomes = await db.income.toArray();
+    const missingIncomes = localIncomes.filter(i => i.id && !sheetIds.has(i.id));
+
+    // 3. Configuración de sueldo
+    const sal = await db.salary_config.orderBy('id').last();
+    if (sal) {
+      await syncSalaryConfigToSheets(sal);
+    }
+
+    const totalMissing = missingExpenses.length + missingIncomes.length;
+    if (totalMissing === 0) {
+      progressCallback?.('✅ Todos los gastos e ingresos ya están sincronizados en Sheets.');
+      return { sent: 0, total: localExpenses.length + localIncomes.length };
     }
 
     const cats = await db.categories.toArray();
@@ -508,12 +546,14 @@ export async function syncMissingExpensesToSheets(
     const subMap = Object.fromEntries(subs.map(s => [s.id!, s]));
 
     let count = 0;
-    for (const exp of missing) {
+
+    // Enviar gastos faltantes
+    for (const exp of missingExpenses) {
       count++;
       const cat = exp.category_id ? catMap[exp.category_id] : null;
       const sub = exp.subcategory_id ? subMap[exp.subcategory_id] : null;
 
-      progressCallback?.(`📤 Enviando faltante ${count} de ${missing.length}: ${exp.detail || exp.store}...`);
+      progressCallback?.(`📤 Enviando gasto ${count} de ${totalMissing}: ${exp.detail || exp.store}...`);
       await syncToSheets('add', exp.id!, {
         fecha: exp.date,
         tipo: 'Gasto',
@@ -524,11 +564,26 @@ export async function syncMissingExpensesToSheets(
         monto: exp.amount,
         notas: exp.notes || '',
       });
-      await new Promise(r => setTimeout(r, 450));
+      await new Promise(r => setTimeout(r, 350));
     }
 
-    progressCallback?.(`✅ Se sincronizaron ${missing.length} gastos faltantes a Google Sheets.`);
-    return { sent: missing.length, total: localExpenses.length };
+    // Enviar ingresos faltantes
+    for (const inc of missingIncomes) {
+      count++;
+      progressCallback?.(`📤 Enviando ingreso ${count} de ${totalMissing}: ${inc.description || 'Ingreso'}...`);
+      await syncToSheets('add', inc.id!, {
+        fecha: inc.date,
+        tipo: 'Ingreso',
+        categoria: 'Ingresos',
+        subcategoria: inc.type === 'salary' ? 'Sueldo' : 'Extra',
+        detalle: inc.description || (inc.type === 'salary' ? 'Sueldo mensual' : 'Ingreso extra'),
+        monto: inc.amount,
+      });
+      await new Promise(r => setTimeout(r, 350));
+    }
+
+    progressCallback?.(`✅ Se sincronizaron ${totalMissing} movimientos faltantes a Google Sheets.`);
+    return { sent: totalMissing, total: localExpenses.length + localIncomes.length };
   } catch (err: any) {
     progressCallback?.('❌ Error al sincronizar faltantes: ' + err.message);
     return { sent: 0, total: 0 };
@@ -558,7 +613,6 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
   progressCallback?.('📡 Conectando con Google Sheets...');
 
   try {
-    // Usamos un proxy CORS-safe: el Apps Script expone un doGet que devuelve JSON con todos los movimientos
     const response = await fetch(`${url}?action=get_all_expenses`, {
       method: 'GET',
       cache: 'no-cache',
@@ -574,6 +628,21 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
     if (data.status !== 'ok' || !Array.isArray(data.rows)) {
       result.errors.push(data.message || 'Respuesta inválida del servidor');
       return result;
+    }
+
+    // 1. Sincronizar configuración de sueldo si viene en la respuesta
+    if (data.salary_config && typeof data.salary_config === 'object') {
+      const sc = data.salary_config;
+      if (sc.monthly_amount) {
+        await db.salary_config.clear();
+        await db.salary_config.add({
+          monthly_amount: parseFloat(sc.monthly_amount),
+          payment_day: parseInt(sc.payment_day) || 31,
+          is_last_business_day: sc.is_last_business_day ?? 1,
+          updated_at: sc.updated_at || new Date().toISOString(),
+        });
+        console.log('[SYNC] ✅ Configuración de sueldo sincronizada desde Sheets:', sc);
+      }
     }
 
     const rows: any[] = data.rows;
@@ -595,79 +664,104 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
         let amount = 0;
         const rawMonto = String(row.monto || '0').replace(/[$ ]/g, '').trim();
         if (rawMonto.includes(',')) {
-          // Formato "8.413,47" → 8413.47
           amount = parseFloat(rawMonto.replace(/\./g, '').replace(',', '.'));
         } else if (rawMonto.includes('.') && rawMonto.split('.').length === 2 && rawMonto.split('.')[1].length === 3) {
-          // Formato "77.000" → 77000
           amount = parseFloat(rawMonto.replace('.', ''));
         } else {
           amount = parseFloat(rawMonto) || 0;
         }
 
-        // Resolver categoría/subcategoría por nombre
-        const catName = (row.categoria || '').toLowerCase().trim();
-        const subName = (row.subcategoria || '').toLowerCase().trim();
-        const category_id = catByName[catName] || 0;
-        const subcategory_id = subByName[subName] || 0;
+        const isIncome = String(row.tipo || '').toLowerCase() === 'ingreso' || String(row.categoria || '').toLowerCase() === 'ingresos';
 
-        // Detectar reintegro si está en las notas
-        let reimbPerson: string | undefined = undefined;
-        let reimbAmount: number | undefined = undefined;
-        let reimbStatus: 'pending' | 'settled' | undefined = undefined;
+        if (isIncome) {
+          // Procesar como Ingreso
+          const isSalary = String(row.subcategoria || '').toLowerCase() === 'sueldo' || /sueldo/i.test(row.detalle || '');
+          const incomeData: Income = {
+            id: sheetId,
+            date: row.fecha || new Date().toISOString().split('T')[0],
+            amount,
+            type: isSalary ? 'salary' : 'extra',
+            description: row.detalle || (isSalary ? 'Sueldo' : 'Ingreso extra'),
+            created_at: new Date().toISOString(),
+          };
 
-        if (row.notas && /Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i.test(row.notas)) {
-          const match = row.notas.match(/Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i);
-          if (match) {
-            reimbPerson = match[1];
-            reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
-            reimbStatus = 'pending';
-          }
-        } else if (row.notas && /Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i.test(row.notas)) {
-          const match = row.notas.match(/Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i);
-          if (match) {
-            reimbPerson = match[1];
-            reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
-            reimbStatus = 'settled';
-          }
-        }
-
-        const expenseData: Expense = {
-          id: sheetId,
-          date: row.fecha || new Date().toISOString().split('T')[0],
-          amount,
-          store: row.comercio || '',
-          detail: row.detalle || '',
-          notes: row.notas || '',
-          category_id,
-          subcategory_id,
-          status: 'active',
-          module_origin: 'sheets_import',
-          reimbursement_person: reimbPerson,
-          reimbursement_amount: reimbAmount,
-          reimbursement_status: reimbStatus,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        // Verificar si ya existe en IndexedDB
-        const existing = await db.expenses.get(sheetId);
-        if (existing) {
-          // Actualizar si el monto, detalle, categoria o estado de reintegro cambió
-          if (
-            existing.amount !== amount ||
-            existing.detail !== expenseData.detail ||
-            existing.store !== expenseData.store ||
-            existing.category_id !== category_id ||
-            existing.reimbursement_status !== reimbStatus
-          ) {
-            await db.expenses.put(expenseData);
-            result.updated++;
+          const existingInc = await db.income.get(sheetId);
+          if (existingInc) {
+            if (existingInc.amount !== amount || existingInc.description !== incomeData.description || existingInc.date !== incomeData.date) {
+              await db.income.put(incomeData);
+              result.updated++;
+            } else {
+              result.skipped++;
+            }
           } else {
-            result.skipped++;
+            await db.income.put(incomeData);
+            result.imported++;
           }
         } else {
-          await db.expenses.put(expenseData);
-          result.imported++;
+          // Procesar como Gasto
+          const catName = (row.categoria || '').toLowerCase().trim();
+          const subName = (row.subcategoria || '').toLowerCase().trim();
+          const category_id = catByName[catName] || 0;
+          const subcategory_id = subByName[subName] || 0;
+
+          // Detectar reintegro si está en las notas
+          let reimbPerson: string | undefined = undefined;
+          let reimbAmount: number | undefined = undefined;
+          let reimbStatus: 'pending' | 'settled' | undefined = undefined;
+
+          if (row.notas && /Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i.test(row.notas)) {
+            const match = row.notas.match(/Devolución pendiente:\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*debe\s*\$?([\d.,]+)/i);
+            if (match) {
+              reimbPerson = match[1];
+              reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
+              reimbStatus = 'pending';
+            }
+          } else if (row.notas && /Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i.test(row.notas)) {
+            const match = row.notas.match(/Devolución de\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\s*por\s*\$?([\d.,]+)\s*cobrada/i);
+            if (match) {
+              reimbPerson = match[1];
+              reimbAmount = parseFloat(match[2].replace(/\./g, '').replace(',', '.')) || 0;
+              reimbStatus = 'settled';
+            }
+          }
+
+          const expenseData: Expense = {
+            id: sheetId,
+            date: row.fecha || new Date().toISOString().split('T')[0],
+            amount,
+            store: row.comercio || '',
+            detail: row.detalle || '',
+            notes: row.notas || '',
+            category_id,
+            subcategory_id,
+            status: 'active',
+            module_origin: 'sheets_import',
+            reimbursement_person: reimbPerson,
+            reimbursement_amount: reimbAmount,
+            reimbursement_status: reimbStatus,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          // Verificar si ya existe en IndexedDB
+          const existing = await db.expenses.get(sheetId);
+          if (existing) {
+            if (
+              existing.amount !== amount ||
+              existing.detail !== expenseData.detail ||
+              existing.store !== expenseData.store ||
+              existing.category_id !== category_id ||
+              existing.reimbursement_status !== reimbStatus
+            ) {
+              await db.expenses.put(expenseData);
+              result.updated++;
+            } else {
+              result.skipped++;
+            }
+          } else {
+            await db.expenses.put(expenseData);
+            result.imported++;
+          }
         }
       } catch (rowErr) {
         result.errors.push(`Fila ID ${row.id}: ${String(rowErr)}`);

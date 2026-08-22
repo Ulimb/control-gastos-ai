@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { db, formatARS, syncMovementToGoogleSheets } from '@/lib/db';
+import { db, formatARS, syncMovementToGoogleSheets, syncSalaryConfigToSheets, syncFromSheets } from '@/lib/db';
 import type { Income, SalaryConfig } from '@/lib/db';
 import { Modal } from '@/components/Modal';
 
@@ -9,6 +9,12 @@ export default function IngresosPage() {
   const [incomes, setIncomes] = useState<Income[]>([]);
   const [salaryConfig, setSalaryConfig] = useState<SalaryConfig | null>(null);
   const [showAddIncome, setShowAddIncome] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'success', duration = 3500) => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), duration);
+  };
 
   // Formulario Nuevo/Editar Ingreso
   const [editingIncome, setEditingIncome] = useState<Income | null>(null);
@@ -33,7 +39,15 @@ export default function IngresosPage() {
 
   const currentYearMonth = new Date().toISOString().slice(0, 7);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    loadData();
+    // Sincronizar en segundo plano desde Google Sheets
+    syncFromSheets().then(res => {
+      if (res.imported > 0 || res.updated > 0) {
+        loadData();
+      }
+    }).catch(() => {});
+  }, []);
 
   const loadData = async () => {
     const items = await db.income.orderBy('date').reverse().toArray();
@@ -49,16 +63,19 @@ export default function IngresosPage() {
 
   const handleConfirmMonthlySalary = async () => {
     if (!salaryConfig) return;
+    const incId = Date.now();
     const newInc = {
+      id: incId,
       date: confirmSalaryDate,
       amount: salaryConfig.monthly_amount,
       type: 'salary' as const,
       description: `Sueldo mensual`,
       created_at: new Date().toISOString(),
     };
-    await db.income.add(newInc);
+    await db.income.put(newInc);
 
     syncMovementToGoogleSheets({
+      expenseId: incId,
       fecha: confirmSalaryDate,
       tipo: 'Ingreso',
       categoria: 'Ingresos',
@@ -67,6 +84,7 @@ export default function IngresosPage() {
       monto: salaryConfig.monthly_amount,
     });
 
+    showToast('✅ Sueldo mensual registrado y sincronizado en Sheets');
     setShowConfirmSalaryModal(false);
     loadData();
   };
@@ -99,8 +117,10 @@ export default function IngresosPage() {
     if (!amount) return;
     const parsedAmt = parseFloat(amount);
     const descStr = description || (type === 'salary' ? 'Sueldo' : 'Ingreso extra');
+    const incId = editingIncome?.id || Date.now();
 
     const incomeData = {
+      id: incId,
       date,
       amount: parsedAmt,
       type,
@@ -108,35 +128,47 @@ export default function IngresosPage() {
       created_at: editingIncome ? editingIncome.created_at : new Date().toISOString(),
     };
 
-    if (editingIncome?.id) {
-      await db.income.update(editingIncome.id, incomeData);
-    } else {
-      await db.income.add(incomeData);
-      syncMovementToGoogleSheets({
-        fecha: date,
-        tipo: 'Ingreso',
-        categoria: 'Ingresos',
-        subcategoria: type === 'salary' ? 'Sueldo' : 'Extra',
-        detalle: descStr,
-        monto: parsedAmt,
-      });
-    }
+    await db.income.put(incomeData);
+    syncMovementToGoogleSheets({
+      expenseId: incId,
+      fecha: date,
+      tipo: 'Ingreso',
+      categoria: 'Ingresos',
+      subcategoria: type === 'salary' ? 'Sueldo' : 'Extra',
+      detalle: descStr,
+      monto: parsedAmt,
+    });
 
+    showToast(editingIncome ? '✅ Ingreso actualizado' : '✅ Ingreso guardado y sincronizado en Sheets');
     setShowAddIncome(false);
     loadData();
   };
 
   const handleSaveSalaryConfig = async () => {
     if (!salaryAmount) return;
-    await db.salary_config.clear();
-    await db.salary_config.add({
+    const conf: SalaryConfig = {
       monthly_amount: parseFloat(salaryAmount),
       payment_day: parseInt(paymentDay) || 31,
       is_last_business_day: parseInt(paymentDay) >= 28 ? 1 : 0,
       updated_at: new Date().toISOString(),
-    });
+    };
+    await db.salary_config.clear();
+    await db.salary_config.add(conf);
+    await syncSalaryConfigToSheets(conf);
+    showToast('✅ Sueldo guardado y sincronizado en la nube');
     setInlineConfigOpen(false);
     loadData();
+  };
+
+  const handleSyncManual = async () => {
+    showToast('📡 Sincronizando con Google Sheets...', 'info', 2000);
+    const res = await syncFromSheets();
+    if (res.imported > 0 || res.updated > 0) {
+      showToast(`✅ Sincronizados: ${res.imported} nuevos, ${res.updated} actualizados`, 'success', 3500);
+      loadData();
+    } else {
+      showToast('✅ Tus ingresos ya están 100% al día con Sheets', 'success', 3000);
+    }
   };
 
   const totalThisMonth = incomes
@@ -145,13 +177,48 @@ export default function IngresosPage() {
 
   return (
     <>
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 className="page-title">💼 Ingresos</h1>
           <p className="page-subtitle">Ingresos del mes: {formatARS(totalThisMonth)}</p>
         </div>
-        <button id="add-income-btn" className="btn btn-primary btn-sm" onClick={handleOpenAdd}>+ Ingreso</button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={handleSyncManual}
+            style={{ fontSize: 12, padding: '6px 10px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+            title="Sincronizar con Google Sheets"
+          >
+            🔄 Sincronizar
+          </button>
+          <button id="add-income-btn" className="btn btn-primary btn-sm" onClick={handleOpenAdd}>+ Ingreso</button>
+        </div>
       </div>
+
+      {/* Toast de feedback */}
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: 90,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 99999,
+          background: toast.type === 'success' ? '#22c55e'
+            : toast.type === 'error' ? '#ef4444'
+            : '#6366f1',
+          color: '#fff',
+          padding: '12px 20px',
+          borderRadius: 12,
+          fontSize: 14,
+          fontWeight: 600,
+          boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+          maxWidth: '85vw',
+          textAlign: 'center',
+        }}>
+          {toast.msg}
+        </div>
+      )}
 
       {/* Tarjeta de Sueldo Mensual */}
       <div className="card card-accent" style={{ marginBottom: 16 }}>
