@@ -85,7 +85,14 @@ export default function HomePage() {
         const savedDraft = typeof window !== 'undefined' ? localStorage.getItem(DRAFT_KEY) : null;
         if (savedDraft) {
           const d = JSON.parse(savedDraft);
-          const hasData = (d.text && d.text.trim()) || (d.imagesBase64 && d.imagesBase64.length > 0) || (d.amount && d.amount.trim()) || (d.detail && d.detail.trim());
+          const hasData = (d.text && d.text.trim()) ||
+            (d.imagesBase64 && d.imagesBase64.length > 0) ||
+            (d.amount && d.amount.trim()) ||
+            (d.detail && d.detail.trim()) ||
+            (d.multiItems && Array.isArray(d.multiItems) && d.multiItems.length > 0) ||
+            d.showMultiModal ||
+            d.showModal;
+
           if (hasData) {
             if (d.text) setText(d.text);
             if (d.date) setDate(d.date);
@@ -95,10 +102,26 @@ export default function HomePage() {
             if (d.detail) setDetail(d.detail);
             if (d.selectedCatId) setSelectedCatId(d.selectedCatId);
             if (d.selectedSubId) setSelectedSubId(d.selectedSubId);
+            if (d.notes) setNotes(d.notes);
             if (d.imagesBase64 && d.imagesBase64.length > 0) setImagesBase64(d.imagesBase64);
             if (d.isShared) setIsShared(d.isShared);
             if (d.reimbursementPerson) setReimbursementPerson(d.reimbursementPerson);
             if (d.reimbursementAmount) setReimbursementAmount(d.reimbursementAmount);
+
+            // Restaurar estado de Desglose de Compra Multi-Artículo si estaba activo
+            if (d.multiItems && Array.isArray(d.multiItems) && d.multiItems.length > 0) {
+              setMultiItems(d.multiItems);
+              if (d.multiStore) setMultiStore(d.multiStore);
+              if (d.multiDate) setMultiDate(d.multiDate);
+              if (d.multiTotalDetected !== undefined) setMultiTotalDetected(d.multiTotalDetected);
+              if (d.multiCartExpected !== undefined) setMultiCartExpected(d.multiCartExpected);
+              if (d.multiDiscount !== undefined) setMultiDiscount(d.multiDiscount);
+              if (d.multiDiscountDesc) setMultiDiscountDesc(d.multiDiscountDesc);
+              if (d.showMultiModal) setShowMultiModal(true);
+            } else if (d.showModal) {
+              setShowModal(true);
+            }
+
             setDraftRestored(true);
           }
         }
@@ -145,10 +168,19 @@ export default function HomePage() {
     return () => window.removeEventListener('paste', handleGlobalPaste);
   }, []);
 
-  // Auto-guardado en localStorage ante cambios en el formulario de inicio
+  // Auto-guardado en localStorage ante cambios en el formulario de inicio o desglose
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const hasData = text.trim() || imagesBase64.length > 0 || amount.trim() || store.trim() || detail.trim() || reimbursementPerson.trim();
+    const hasData = text.trim() ||
+      imagesBase64.length > 0 ||
+      amount.trim() ||
+      store.trim() ||
+      detail.trim() ||
+      reimbursementPerson.trim() ||
+      multiItems.length > 0 ||
+      showMultiModal ||
+      showModal;
+
     if (hasData) {
       const draft = {
         text,
@@ -159,15 +191,32 @@ export default function HomePage() {
         detail,
         selectedCatId,
         selectedSubId,
+        notes,
         imagesBase64,
         isShared,
         reimbursementPerson,
         reimbursementAmount,
+        // Desglose de compra multi-artículo
+        showMultiModal,
+        multiItems,
+        multiStore,
+        multiDate,
+        multiTotalDetected,
+        multiCartExpected,
+        multiDiscount,
+        multiDiscountDesc,
+        // Modal individual
+        showModal,
         updatedAt: Date.now()
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     }
-  }, [text, date, inputMode, amount, store, detail, selectedCatId, selectedSubId, imagesBase64, isShared, reimbursementPerson, reimbursementAmount]);
+  }, [
+    text, date, inputMode, amount, store, detail, selectedCatId, selectedSubId, notes,
+    imagesBase64, isShared, reimbursementPerson, reimbursementAmount,
+    showMultiModal, multiItems, multiStore, multiDate, multiTotalDetected, multiCartExpected,
+    multiDiscount, multiDiscountDesc, showModal
+  ]);
 
   const handleDiscardDraft = () => {
     if (typeof window !== 'undefined') {
@@ -179,6 +228,11 @@ export default function HomePage() {
     setIsShared(false);
     setReimbursementPerson('');
     setReimbursementAmount('');
+    setMultiItems([]);
+    setShowMultiModal(false);
+    setMultiDiscount(null);
+    setMultiDiscountDesc('');
+    setShowModal(false);
     setDraftRestored(false);
     showToast('🗑️ Borrador descartado', 'info', 2000);
   };
@@ -1664,7 +1718,14 @@ export default function HomePage() {
       {/* Modal de Desglose de Compra Multi-Artículo */}
       <Modal
         isOpen={showMultiModal}
-        onClose={() => { setShowMultiModal(false); setImagesBase64([]); setText(''); }}
+        onClose={() => {
+          setShowMultiModal(false);
+          setMultiItems([]);
+          setImagesBase64([]);
+          setText('');
+          if (typeof window !== 'undefined') localStorage.removeItem(DRAFT_KEY);
+          setDraftRestored(false);
+        }}
         title={`🛒 Desglose de Compra (${multiItems.length} artículos)`}
       >
         <div style={{ maxHeight: '75vh', overflowY: 'auto', paddingRight: 4 }}>
@@ -2037,7 +2098,14 @@ export default function HomePage() {
             type="button"
             className="btn btn-ghost"
             style={{ width: '100%', marginTop: 8 }}
-            onClick={() => { setShowMultiModal(false); setImagesBase64([]); setText(''); }}
+            onClick={() => {
+              setShowMultiModal(false);
+              setMultiItems([]);
+              setImagesBase64([]);
+              setText('');
+              if (typeof window !== 'undefined') localStorage.removeItem(DRAFT_KEY);
+              setDraftRestored(false);
+            }}
           >
             Cancelar
           </button>
