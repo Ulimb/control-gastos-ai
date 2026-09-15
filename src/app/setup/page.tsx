@@ -18,7 +18,21 @@ function SetupForm() {
     const urlParam = searchParams.get('scriptUrl');
     const keyParam = searchParams.get('apiKey');
     const pinParam = searchParams.get('pin');
+    const clearParam = searchParams.get('clear');
     
+    if (clearParam === 'true') {
+      // Limpiar la base de datos y el localStorage para empezar de cero
+      localStorage.clear();
+      sessionStorage.clear();
+      import('@/lib/db').then(({ db }) => {
+        db.expenses.clear();
+        db.income.clear();
+        db.categories.clear();
+        db.subcategories.clear();
+        db.salary_config.clear();
+      });
+    }
+
     if (urlParam) setScriptUrl(urlParam);
     if (keyParam) setApiKey(keyParam);
     if (pinParam) setPin(pinParam);

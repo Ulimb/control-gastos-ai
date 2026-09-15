@@ -322,7 +322,13 @@ export function formatARS(value: number): string {
   }).format(value || 0);
 }
 
-export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzjFpwwpOvKFTTTHb9Quf5J6MgTDCBF-pHQLFgBYIrQogBNqMSIvdvyrGg5oQ31TyaRaw/exec';
+export const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzjFpwwpOvKFTTTHb9Quf5J6MgTDCBF-pHQLFgBYIrQogBNqMSIvdvyrGg5oQ31TyaRaw/exec';
+export const getAppsScriptUrl = () => {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('apps_script_url') || DEFAULT_APPS_SCRIPT_URL;
+  }
+  return DEFAULT_APPS_SCRIPT_URL;
+};
 
 // ─── Logging de sincronización ────────────────────────────────────────────────
 
@@ -377,7 +383,7 @@ export async function syncToSheets(
 ): Promise<{ ok: boolean; error?: string }> {
   const ts = new Date().toISOString();
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
-  const url = customUrl || APPS_SCRIPT_URL;
+  const url = customUrl || getAppsScriptUrl();
 
   if (!url) {
     const entry: SyncLogEntry = { ts, action, expenseId, movement, status: 'ERROR_URL', error: 'Sin URL configurada' };
@@ -477,7 +483,7 @@ export async function settleExpenseReimbursement(expenseId: number, returnDate?:
 
 export async function syncSalaryConfigToSheets(config: SalaryConfig): Promise<{ ok: boolean }> {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
-  const url = customUrl || APPS_SCRIPT_URL;
+  const url = customUrl || getAppsScriptUrl();
 
   if (!url) return { ok: false };
 
@@ -506,7 +512,7 @@ export async function syncMissingExpensesToSheets(
   progressCallback?: (msg: string) => void
 ): Promise<{ sent: number; total: number }> {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
-  const url = customUrl || APPS_SCRIPT_URL;
+  const url = customUrl || getAppsScriptUrl();
 
   if (!url) return { sent: 0, total: 0 };
 
