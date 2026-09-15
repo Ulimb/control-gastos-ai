@@ -2,7 +2,6 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { FiDatabase, FiKey, FiLock, FiCheck } from 'react-icons/fi';
 
 function SetupForm() {
   const router = useRouter();
@@ -21,7 +20,6 @@ function SetupForm() {
     const clearParam = searchParams.get('clear');
     
     if (clearParam === 'true') {
-      // Limpiar la base de datos y el localStorage para empezar de cero
       localStorage.clear();
       sessionStorage.clear();
       import('@/lib/db').then(({ db }) => {
@@ -85,7 +83,7 @@ function SetupForm() {
       <div className="space-y-5">
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1 flex items-center gap-2">
-            <FiDatabase className="text-indigo-400" /> URL de Apps Script (Sheets)
+            <span>🗄️</span> URL de Apps Script (Sheets)
           </label>
           <input
             type="text"
@@ -99,7 +97,7 @@ function SetupForm() {
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1 flex items-center gap-2">
-            <FiKey className="text-indigo-400" /> Gemini API Key (Opcional)
+            <span>🔑</span> Gemini API Key (Opcional)
           </label>
           <input
             type="password"
@@ -113,7 +111,7 @@ function SetupForm() {
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1 flex items-center gap-2">
-            <FiLock className="text-indigo-400" /> Crear un PIN de acceso
+            <span>🔒</span> Crear un PIN de acceso
           </label>
           <input
             type="number"
@@ -134,7 +132,7 @@ function SetupForm() {
           <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         ) : (
           <>
-            <FiCheck size={18} /> Iniciar Aplicación
+            <span>✅</span> Iniciar Aplicación
           </>
         )}
       </button>
