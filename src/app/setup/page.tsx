@@ -22,12 +22,12 @@ function SetupForm() {
     if (clearParam === 'true') {
       localStorage.clear();
       sessionStorage.clear();
-      import('@/lib/db').then(({ db }) => {
-        db.expenses.clear();
-        db.income.clear();
-        db.categories.clear();
-        db.subcategories.clear();
-        db.salary_config.clear();
+      import('@/lib/db').then(async ({ db }) => {
+        await db.expenses.clear();
+        await db.income.clear();
+        await db.categories.clear();
+        await db.subcategories.clear();
+        await db.salary_config.clear();
       });
     }
 

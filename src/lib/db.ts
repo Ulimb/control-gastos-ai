@@ -325,9 +325,9 @@ export function formatARS(value: number): string {
 export const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzjFpwwpOvKFTTTHb9Quf5J6MgTDCBF-pHQLFgBYIrQogBNqMSIvdvyrGg5oQ31TyaRaw/exec';
 export const getAppsScriptUrl = () => {
   if (typeof window !== 'undefined') {
-    return localStorage.getItem('apps_script_url') || DEFAULT_APPS_SCRIPT_URL;
+    return localStorage.getItem('apps_script_url');
   }
-  return DEFAULT_APPS_SCRIPT_URL;
+  return null;
 };
 
 // ─── Logging de sincronización ────────────────────────────────────────────────

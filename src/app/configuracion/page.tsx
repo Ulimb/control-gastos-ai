@@ -28,7 +28,7 @@ export default function ConfiguracionPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setApiKey(localStorage.getItem('gemini_api_key') || process.env.NEXT_PUBLIC_GEMINI_API_KEY || ['AQ', 'Ab8RN6J8SVaBP1CCPsSkorrpS-Z-HoFZ6Wf29Y46uOIUiDkAUQ'].join('.'));
-      setAppsScriptUrl(localStorage.getItem('apps_script_url') || 'https://script.google.com/macros/s/AKfycbzjFpwwpOvKFTTTHb9Quf5J6MgTDCBF-pHQLFgBYIrQogBNqMSIvdvyrGg5oQ31TyaRaw/exec');
+      setAppsScriptUrl(localStorage.getItem('apps_script_url') || '');
       setPin(localStorage.getItem('app_pin') || '1234');
       setSyncLogs(getSyncLogs());
     }
@@ -419,11 +419,14 @@ export default function ConfiguracionPage() {
             if (window.confirm('⚠️ ¿ESTÁS SEGURO? Esto borrará toda tu base de datos local y DESCONECTARÁ la app de tu Google Sheets. La app volverá a la pantalla de bienvenida.')) {
               localStorage.removeItem('apps_script_url');
               sessionStorage.clear();
-              import('@/lib/db').then(({ db }) => {
-                db.expenses.clear();
-                db.income.clear();
+              import('@/lib/db').then(async ({ db }) => {
+                await db.expenses.clear();
+                await db.income.clear();
+                await db.categories.clear();
+                await db.subcategories.clear();
+                await db.salary_config.clear();
                 alert('App desconectada y limpiada. Serás redirigido.');
-                window.location.href = '/';
+                window.location.href = '/setup';
               });
             }
           }}
