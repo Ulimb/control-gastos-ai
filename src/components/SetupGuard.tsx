@@ -18,31 +18,10 @@ export function SetupGuard({ children }: { children: React.ReactNode }) {
         const url = localStorage.getItem('apps_script_url');
         
         if (!url) {
-          // Check if this is an old device (Ulises) that has local data but no explicit URL set
-          try {
-            const count = await db.expenses.count();
-            if (count > 0) {
-              // It's the old user, silently set the defaults to migrate him seamlessly
-              localStorage.setItem('apps_script_url', DEFAULT_URL);
-              if (!localStorage.getItem('gemini_api_key')) {
-                localStorage.setItem('gemini_api_key', BUILTIN_KEY);
-              }
-              setIsReady(true);
-            } else {
-              // It's a brand new device/user (the girlfriend)
-              if (pathname !== '/setup') {
-                router.push('/setup');
-              } else {
-                setIsReady(true);
-              }
-            }
-          } catch (e) {
-            console.error('Error checking setup', e);
-            if (pathname !== '/setup') {
-              router.push('/setup');
-            } else {
-              setIsReady(true);
-            }
+          if (pathname !== '/setup') {
+            router.push('/setup');
+          } else {
+            setIsReady(true);
           }
         } else {
           setIsReady(true);

@@ -416,17 +416,19 @@ export default function ConfiguracionPage() {
           className="btn" 
           style={{ marginTop: 10, backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
           onClick={() => {
-            if (window.confirm('⚠️ ¿ESTÁS SEGURO? Esto borrará toda tu base de datos local del teléfono. Solo hazlo si quieres limpiar el celular para otra persona o si los datos ya están en Google Sheets.')) {
+            if (window.confirm('⚠️ ¿ESTÁS SEGURO? Esto borrará toda tu base de datos local y DESCONECTARÁ la app de tu Google Sheets. La app volverá a la pantalla de bienvenida.')) {
+              localStorage.removeItem('apps_script_url');
+              sessionStorage.clear();
               import('@/lib/db').then(({ db }) => {
                 db.expenses.clear();
                 db.income.clear();
-                alert('Base de datos borrada con éxito. La app se reiniciará.');
+                alert('App desconectada y limpiada. Serás redirigido.');
                 window.location.href = '/';
               });
             }
           }}
         >
-          🗑️ BORRAR BASE DE DATOS LOCAL (RESET)
+          🗑️ DESCONECTAR Y BORRAR TODO (RESET)
         </button>
       </div>
 
