@@ -411,6 +411,23 @@ export default function ConfiguracionPage() {
         <button id="export-json-btn" className="btn btn-ghost" onClick={handleExportData} disabled={exporting}>
           📥 {exporting ? 'Exportando...' : 'Exportar Backup completo a JSON'}
         </button>
+
+        <button 
+          className="btn" 
+          style={{ marginTop: 10, backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+          onClick={() => {
+            if (window.confirm('⚠️ ¿ESTÁS SEGURO? Esto borrará toda tu base de datos local del teléfono. Solo hazlo si quieres limpiar el celular para otra persona o si los datos ya están en Google Sheets.')) {
+              import('@/lib/db').then(({ db }) => {
+                db.expenses.clear();
+                db.income.clear();
+                alert('Base de datos borrada con éxito. La app se reiniciará.');
+                window.location.href = '/';
+              });
+            }
+          }}
+        >
+          🗑️ BORRAR BASE DE DATOS LOCAL (RESET)
+        </button>
       </div>
 
       {/* ─── Logs de Sincronización con Sheets ─── */}
