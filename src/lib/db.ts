@@ -190,25 +190,14 @@ export async function seedDatabase(force: boolean = false) {
     return;
   }
 
-  const expenseCount = await db.expenses.count();
-  if (expenseCount > 0 && !force) {
-    if (typeof window !== 'undefined') localStorage.setItem('db_seeded', 'true');
-    return;
-  }
+  // Ya no chequeamos expenseCount, porque ahora queremos que SIEMPRE cargue las categorías
+  // para los nuevos usuarios, pero NUNCA los gastos (para evitar filtrar datos a otros perfiles).
 
   await db.transaction(
     'rw',
     [
       db.categories,
       db.subcategories,
-      db.expenses,
-      db.fixed_expenses,
-      db.fixed_expense_payments,
-      db.income,
-      db.salary_config,
-      db.loans,
-      db.loan_payments,
-      db.reintegros,
       db.ai_rules,
     ],
     async () => {
@@ -216,30 +205,27 @@ export async function seedDatabase(force: boolean = false) {
         await Promise.all([
           db.categories.clear(),
           db.subcategories.clear(),
-          db.expenses.clear(),
-          db.fixed_expenses.clear(),
-          db.fixed_expense_payments.clear(),
-          db.income.clear(),
-          db.salary_config.clear(),
-          db.loans.clear(),
-          db.loan_payments.clear(),
-          db.reintegros.clear(),
           db.ai_rules.clear(),
         ]);
       }
 
       const h = historicalData as any;
-      if (h.categories?.length) await db.categories.bulkAdd(h.categories);
-      if (h.subcategories?.length) await db.subcategories.bulkAdd(h.subcategories);
-      if (h.expenses?.length) await db.expenses.bulkAdd(h.expenses);
-      if (h.fixed_expenses?.length) await db.fixed_expenses.bulkAdd(h.fixed_expenses);
-      if (h.fixed_expense_payments?.length) await db.fixed_expense_payments.bulkAdd(h.fixed_expense_payments);
-      if (h.income?.length) await db.income.bulkAdd(h.income);
-      if (h.salary_config?.length) await db.salary_config.bulkAdd(h.salary_config);
-      if (h.loans?.length) await db.loans.bulkAdd(h.loans);
-      if (h.loan_payments?.length) await db.loan_payments.bulkAdd(h.loan_payments);
-      if (h.reintegros?.length) await db.reintegros.bulkAdd(h.reintegros);
-      if (h.ai_rules?.length) await db.ai_rules.bulkAdd(h.ai_rules);
+      
+      // Solo sembramos datos de estructura (categorías), NO datos personales (gastos, sueldos)
+      if (h.categories?.length) {
+        const catCount = await db.categories.count();
+        if (catCount === 0 || force) await db.categories.bulkAdd(h.categories);
+      }
+      
+      if (h.subcategories?.length) {
+        const subCount = await db.subcategories.count();
+        if (subCount === 0 || force) await db.subcategories.bulkAdd(h.subcategories);
+      }
+      
+      if (h.ai_rules?.length) {
+        const rulesCount = await db.ai_rules.count();
+        if (rulesCount === 0 || force) await db.ai_rules.bulkAdd(h.ai_rules);
+      }
     }
   );
 
