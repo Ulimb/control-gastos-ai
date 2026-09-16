@@ -609,7 +609,7 @@ export async function syncFromSheets(progressCallback?: (msg: string) => void): 
   const result: SheetsImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
 
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('apps_script_url') : null;
-  const url = customUrl || APPS_SCRIPT_URL;
+  const url = customUrl || getAppsScriptUrl();
 
   if (!url) {
     result.errors.push('Sin URL de Apps Script configurada');
