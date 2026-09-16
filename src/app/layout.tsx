@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { BottomNav } from '@/components/BottomNav';
 import { AuthGuard } from '@/components/AuthGuard';
-import { SetupGuard } from '@/components/SetupGuard';
 
 export const metadata: Metadata = {
   title: 'Mis Finanzas',
@@ -51,16 +50,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         `}} />
       </head>
       <body>
-        <SetupGuard>
-          <AuthGuard>
-            <div className="app-shell">
-              <main className="page-content">
-                {children}
-              </main>
-              <BottomNav />
-            </div>
-          </AuthGuard>
-        </SetupGuard>
+        <AuthGuard>
+          <div className="app-shell">
+            <main className="page-content">
+              {children}
+            </main>
+            <BottomNav />
+          </div>
+        </AuthGuard>
       </body>
     </html>
   );
